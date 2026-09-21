@@ -617,6 +617,9 @@
     <string name="monet_generator_install_hint">Install this ZIP with Magisk, KernelSU, APatch, or a derivative root manager. After installation, enable the “Monet engine module generator” switch and reboot. KernelSU/APatch users must select WeChat under “Superuser” and turn off “Unmount modules”.</string>
     <string name="feature_replace_navigation_bar_name">Replace home navigation bar</string>
     <string name="feature_replace_navigation_bar_description">Replace the bottom navigation bar of the homepage with Material Design or Backdrop style</string>
+    <string name="feature_floating_main_header_name">Floating home header</string>
+    <string name="feature_floating_main_header_description">Display the shared header of Chats, Contacts, Discover, and Me as a floating liquid-glass card</string>
+    <string name="main_floating_header_summary">Applies only to the four home tabs; the system status bar and chat headers are not changed</string>
     <string name="feature_themes_name">Themes</string>
     <string name="feature_themes_description">Apply the theme in THEMES_PATH and restart WeChat after switching to take effect.</string>
     <string name="feature_home_side_panel_name">Home side panel</string>

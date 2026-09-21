@@ -578,6 +578,9 @@
     <string name="monet_generator_install_hint">請透過 Magisk、KernelSU、APatch 或其衍生 Root 管理器安裝此 ZIP。安裝後，請啟用「莫奈引擎模組產生器」開關並重新啟動。KernelSU/APatch 使用者還需在「超級使用者」中選擇微信，關閉「卸載模組」選項。</string>
     <string name="feature_replace_navigation_bar_name">美化首頁底部導航欄</string>
     <string name="feature_replace_navigation_bar_description">將首頁底欄替換爲 Material Design 或 Backdrop 風格</string>
+    <string name="feature_floating_main_header_name">主頁懸浮頂欄</string>
+    <string name="feature_floating_main_header_description">將主頁、通訊錄、發現和我的共用頂欄顯示為懸浮液態玻璃卡片</string>
+    <string name="main_floating_header_summary">僅套用於主頁四個標籤，系統狀態列和聊天標題列不受影響</string>
     <string name="feature_themes_name">主題</string>
     <string name="feature_themes_description">應用 THEMES_PATH 中的主題，切換後重啓微信生效</string>
     <string name="feature_home_side_panel_name">主頁側滑面板</string>
