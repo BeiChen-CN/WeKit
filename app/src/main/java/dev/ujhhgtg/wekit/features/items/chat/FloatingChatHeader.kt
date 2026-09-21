@@ -1574,15 +1574,17 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         val shadowPadding = state.decoration.shadowPadding(elevationPx)
         val targetWidth = state.root.width + shadowPadding * 2
         val targetHeight = state.root.height + shadowPadding * 2
-        val params = state.decoration.layoutParams as FrameLayout.LayoutParams
-        if (params.width != targetWidth || params.height != targetHeight ||
-            params.leftMargin != -shadowPadding || params.topMargin != -shadowPadding
-        ) {
-            params.width = targetWidth
-            params.height = targetHeight
-            params.leftMargin = -shadowPadding
-            params.topMargin = -shadowPadding
-            state.decoration.layoutParams = params
+        listOf(state.decoration, state.glassLayer).forEach { layer ->
+            val params = layer.layoutParams as FrameLayout.LayoutParams
+            if (params.width != targetWidth || params.height != targetHeight ||
+                params.leftMargin != -shadowPadding || params.topMargin != -shadowPadding
+            ) {
+                params.width = targetWidth
+                params.height = targetHeight
+                params.leftMargin = -shadowPadding
+                params.topMargin = -shadowPadding
+                layer.layoutParams = params
+            }
         }
 
         val rootHeight = state.root.height.toFloat()
