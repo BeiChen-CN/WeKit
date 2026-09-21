@@ -657,7 +657,7 @@
     <string name="feature_floating_chat_footer_name">懸浮輸入框</string>
     <string name="feature_floating_chat_footer_description">將聊天輸入框改爲懸浮卡片形式, 帶有圓角、陰影和側邊距\n</string>
     <string name="feature_floating_chat_header_name">懸浮標題欄</string>
-    <string name="feature_floating_chat_header_description">將聊天界面頂部標題欄及標題下方掛件改爲懸浮卡片形式, 帶有圓角、陰影和側邊距\n</string>
+    <string name="feature_floating_chat_header_description">將聊天界面頂部標題欄及標題下方掛件顯示爲懸浮卡片，標題欄可啓用液態玻璃\n</string>
     <string name="feature_force_enable_all_tools_name">強制啓用所有功能</string>
     <string name="feature_force_enable_all_tools_description">在聊天工具面板中強制啓用所有功能</string>
     <string name="feature_forward_favorite_voices_name">轉發收藏語音</string>
@@ -2339,7 +2339,7 @@
     <string name="chat_message_time_invalid_number">數字格式不正確</string>
     <string name="chat_floating_header_title">懸浮標題欄</string>
     <string name="chat_floating_header_restart_hint">改動即時生效</string>
-    <string name="chat_floating_header_summary">標題欄及標題下方的置頂消息等卡片均以懸浮卡片顯示</string>
+    <string name="chat_floating_header_summary">標題欄及標題下方卡片均懸浮顯示，液態玻璃僅應用於標題欄</string>
     <string name="chat_floating_header_style_label">標題欄樣式</string>
     <string name="chat_floating_header_style_integrated">一體式</string>
     <string name="chat_floating_header_style_separated">分體式</string>

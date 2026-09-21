@@ -659,7 +659,7 @@
     <string name="feature_floating_chat_footer_name">悬浮输入框</string>
     <string name="feature_floating_chat_footer_description">将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距\n</string>
     <string name="feature_floating_chat_header_name">悬浮标题栏</string>
-    <string name="feature_floating_chat_header_description">将聊天界面顶部标题栏及标题下方挂件改为悬浮卡片形式, 带有圆角、阴影和侧边距\n</string>
+    <string name="feature_floating_chat_header_description">将聊天界面顶部标题栏及标题下方挂件显示为悬浮卡片，标题栏可启用液态玻璃\n</string>
     <string name="feature_force_enable_all_tools_name">强制启用所有功能</string>
     <string name="feature_force_enable_all_tools_description">在聊天工具面板中强制启用所有功能</string>
     <string name="feature_forward_favorite_voices_name">转发收藏语音</string>
@@ -2344,7 +2344,7 @@
     <string name="chat_message_time_invalid_number">数字格式不正确</string>
     <string name="chat_floating_header_title">悬浮标题栏</string>
     <string name="chat_floating_header_restart_hint">改动即时生效</string>
-    <string name="chat_floating_header_summary">标题栏及标题下方的置顶消息等卡片均以悬浮卡片显示</string>
+    <string name="chat_floating_header_summary">标题栏及标题下方卡片均悬浮显示，液态玻璃仅应用于标题栏</string>
     <string name="chat_floating_header_style_label">标题栏样式</string>
     <string name="chat_floating_header_style_integrated">一体式</string>
     <string name="chat_floating_header_style_separated">分体式</string>

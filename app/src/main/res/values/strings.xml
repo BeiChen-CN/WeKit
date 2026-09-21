@@ -696,7 +696,7 @@
     <string name="feature_floating_chat_footer_name">Floating input box</string>
     <string name="feature_floating_chat_footer_description">Change the chat input box to a floating card form, with rounded corners, shadow and side margins</string>
     <string name="feature_floating_chat_header_name">floating title bar</string>
-    <string name="feature_floating_chat_header_description">Change the title bar at the top of the chat interface and the widgets below the title into floating cards, with rounded corners, shadows and side margins</string>
+    <string name="feature_floating_chat_header_description">Show the chat title bar and widgets below it as floating cards, with optional liquid glass on the title bar</string>
     <string name="feature_force_enable_all_tools_name">Force-enable all tools</string>
     <string name="feature_force_enable_all_tools_description">Force all features in chat panel</string>
     <string name="feature_forward_favorite_voices_name">Forward saved voice messages</string>
@@ -2388,7 +2388,7 @@
     <string name="chat_message_time_invalid_number">Invalid number</string>
     <string name="chat_floating_header_title">Floating header</string>
     <string name="chat_floating_header_restart_hint">Changes apply immediately</string>
-    <string name="chat_floating_header_summary">Show the header and cards below it, such as pinned messages, as floating cards</string>
+    <string name="chat_floating_header_summary">Show the title bar and cards below it as floating cards; liquid glass applies only to the title bar</string>
     <string name="chat_floating_header_style_label">Header style</string>
     <string name="chat_floating_header_style_integrated">Integrated</string>
     <string name="chat_floating_header_style_separated">Separated</string>

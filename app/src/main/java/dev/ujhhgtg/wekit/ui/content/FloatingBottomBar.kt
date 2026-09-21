@@ -41,10 +41,10 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
@@ -82,20 +82,10 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.blur.blur
 import top.yukonga.miuix.kmp.blur.drawBackdrop
-import top.yukonga.miuix.kmp.blur.highlight.BloomStroke
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
-import top.yukonga.miuix.kmp.blur.highlight.LightPosition
-import top.yukonga.miuix.kmp.blur.highlight.LightSource
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
-import top.yukonga.miuix.kmp.blur.sensor.DeviceTilt
-import top.yukonga.miuix.kmp.blur.sensor.rememberDeviceTilt
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.sign
-import kotlin.math.sin
-import kotlin.math.sqrt
 import androidx.compose.material3.LocalContentColor as M3LocalContentColor
 
 private val LocalFloatingBottomBarContentColor = staticCompositionLocalOf { Color.Unspecified }
@@ -132,68 +122,6 @@ enum class FloatingBottomBarMode {
     None
 }
 
-private val iosIndicatorSpecular: Highlight = Highlight(
-    width = 1.dp,
-    alpha = 1f,
-    style = BloomStroke(
-        color = Color.White.copy(alpha = 0.12f),
-        innerBlurRadius = 2.0.dp,
-        primaryLight = LightSource(
-            position = LightPosition(0.5f, -0.3f, -0.05f),
-            color = Color.White,
-            intensity = 1f,
-        ),
-        secondaryLight = LightSource(
-            position = LightPosition(0.5f, 0.8f, -0.5f),
-            color = Color.White,
-            intensity = 0.4f,
-        ),
-        dualPeak = true,
-    ),
-)
-
-// Mirrors miuix-blur HighlightStyle's LIGHT_REF — keep in sync.
-private const val LIGHT_REF_X = 0.5f
-private const val LIGHT_REF_Y = 0.7f
-private const val GRAVITY_DIR_THRESHOLD_SQ = 0.01f // |g_xy| > 0.1, ≈ 6° tilt
-
-/** Tracks gravity for a `dualPeak` highlight's primary light, with an extra UV-clockwise offset on top. */
-@Composable
-private fun rememberGravityRotatedHighlight(
-    base: Highlight,
-    tilt: DeviceTilt,
-    extraDegrees: Float = 0f,
-): Highlight {
-    val baseStyle = base.style as BloomStroke
-    val rotatedPrimary = remember(tilt, baseStyle.primaryLight, extraDegrees) {
-        val basePrimary = baseStyle.primaryLight
-        val gx = tilt.gravityX
-        val gy = tilt.gravityY
-        val gMagSq = gx * gx + gy * gy
-        val (lx0, ly0) = if (gMagSq > GRAVITY_DIR_THRESHOLD_SQ) {
-            val invMag = 1f / sqrt(gMagSq)
-            (gx * invMag) to (gy * invMag)
-        } else {
-            0f to -1f
-        }
-        val rad = extraDegrees * PI / 180.0
-        val c = cos(rad).toFloat()
-        val s = sin(rad).toFloat()
-        val lx = c * lx0 - s * ly0
-        val ly = s * lx0 + c * ly0
-        basePrimary.copy(
-            position = LightPosition(
-                x = LIGHT_REF_X + lx,
-                y = LIGHT_REF_Y + ly,
-                z = basePrimary.position.z,
-            ),
-        )
-    }
-    return remember(base, rotatedPrimary) {
-        base.copy(style = baseStyle.copy(primaryLight = rotatedPrimary))
-    }
-}
-
 @Composable
 fun <T> FloatingBottomBar(
     items: List<T>,
@@ -216,8 +144,7 @@ fun <T> FloatingBottomBar(
     val isBlurMode = mode == FloatingBottomBarMode.Blur
     val isGlassTransparent = isLiquidGlassMode && liquidGlassBlurRadius <= 0.dp
     val containerColor =
-        if (isGlassTransparent) Color.Transparent
-        else if (isLiquidGlassMode) colors.containerColor.copy(0.4f)
+        if (isLiquidGlassMode) floatingGlassContainerColor(colors.containerColor, liquidGlassBlurRadius)
         else colors.containerColor
 
     val tabsBackdrop = rememberLayerBackdrop()
@@ -401,13 +328,9 @@ fun <T> FloatingBottomBar(
             null
         }
 
-    val tilt = if (isLiquidGlassMode && dynamicGravityHighlight) {
-        rememberDeviceTilt().value
-    } else {
-        DeviceTilt.Zero
-    }
-    val baseHighlight = rememberGravityRotatedHighlight(iosIndicatorSpecular, tilt, extraDegrees = -45f)
-    val pillHighlight = rememberGravityRotatedHighlight(iosIndicatorSpecular, tilt, extraDegrees = 90f)
+    val tilt = rememberFloatingGlassTilt(isLiquidGlassMode && dynamicGravityHighlight)
+    val baseHighlight = rememberFloatingGlassHighlight(tilt, extraDegrees = -45f)
+    val pillHighlight = rememberFloatingGlassHighlight(tilt, extraDegrees = 90f)
 
     val combinedBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
@@ -436,27 +359,18 @@ fun <T> FloatingBottomBar(
                     )
                     .then(
                         if (isLiquidGlassMode) {
-                            Modifier.drawBackdrop(
+                            Modifier.floatingGlassSurface(
                                 backdrop = backdrop,
-                                shape = { pillShape },
-                                effects = {
-                                    if (!isGlassTransparent) {
-                                        vibrancy()
-                                        blur(liquidGlassBlurRadius.toPx(), liquidGlassBlurRadius.toPx())
-                                        lens(
-                                            refractionHeight = 24.dp.toPx(),
-                                            refractionAmount = 24.dp.toPx(),
-                                        )
-                                    }
-                                },
-                                highlight = { baseHighlight.copy(alpha = 0.75f) },
+                                shape = pillShape,
+                                containerColor = colors.containerColor,
+                                blurRadius = liquidGlassBlurRadius,
+                                highlight = baseHighlight,
                                 layerBlock = {
                                     val width = size.width.coerceAtLeast(1f)
                                     val s = lerp(1f, 1f + 16.dp.toPx() / width, dampedDragAnimation.pressProgress)
                                     scaleX = s
                                     scaleY = s
                                 },
-                                onDrawSurface = { drawRect(containerColor) },
                             )
                         } else if (isBlurMode) {
                             Modifier.drawBackdrop(

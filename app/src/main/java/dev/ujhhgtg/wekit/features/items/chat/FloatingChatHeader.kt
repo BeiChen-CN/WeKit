@@ -32,22 +32,38 @@ import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.shadow.Shadow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.isGone
 import androidx.core.view.isVisible
+import androidx.lifecycle.LifecycleOwner
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChattingUILayout
 import dev.ujhhgtg.reflekt.reflekt
@@ -60,22 +76,33 @@ import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.TextButton
+import dev.ujhhgtg.wekit.ui.content.floatingGlassSurface
+import dev.ujhhgtg.wekit.ui.content.rememberFloatingGlassHighlight
+import dev.ujhhgtg.wekit.ui.content.rememberFloatingGlassTilt
+import dev.ujhhgtg.wekit.ui.content.rememberViewBackdrop
 import dev.ujhhgtg.wekit.ui.content.m3.BaseItemContainer
 import dev.ujhhgtg.wekit.ui.content.m3.BaseWidget
 import dev.ujhhgtg.wekit.ui.content.m3.DropDownMenuWidget
 import dev.ujhhgtg.wekit.ui.content.m3.DropdownOption
 import dev.ujhhgtg.wekit.ui.content.m3.IntNumberPickerWidget
 import dev.ujhhgtg.wekit.ui.content.m3.SegmentedColumn
+import dev.ujhhgtg.wekit.ui.content.m3.SwitchWidget
 import dev.ujhhgtg.wekit.ui.utils.allViews
 import dev.ujhhgtg.wekit.ui.utils.findViewWhich
 import dev.ujhhgtg.wekit.ui.utils.findViewsWhich
+import dev.ujhhgtg.wekit.ui.utils.LifecycleOwnerProvider
+import dev.ujhhgtg.wekit.ui.utils.setLifecycleOwner
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
+import dev.ujhhgtg.wekit.ui.utils.theme.InjectedUiTheme
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.android.isDarkMode
 import dev.ujhhgtg.wekit.utils.reflection.int
 import java.lang.reflect.Field
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
+import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.blur.highlight.Highlight
+import androidx.compose.ui.graphics.Color as ComposeColor
 
 @Suppress("DEPRECATION")
 object FloatingChatHeader : ClickableFeature(), IResolveDex {
@@ -93,6 +120,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private const val DEFAULT_EXTRA_GAP = 8
     private const val DEFAULT_ELEVATION = 4
     private const val DEFAULT_COMPONENT_GAP = 8
+    private const val DEFAULT_BLUR_RADIUS = 8
 
     private const val MIN_CORNER_RADIUS = 0
     private const val MAX_CORNER_RADIUS = 32
@@ -106,6 +134,8 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private const val MAX_ELEVATION = 16
     private const val MIN_COMPONENT_GAP = 0
     private const val MAX_COMPONENT_GAP = 24
+    private const val MIN_BLUR_RADIUS = 0
+    private const val MAX_BLUR_RADIUS = 40
 
     private const val RECONCILE_LAYOUT = 1
     private const val RECONCILE_TIPS = 1 shl 1
@@ -212,6 +242,12 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private var componentGapDp by prefOption(
         "floating_chat_header_component_gap",
         DEFAULT_COMPONENT_GAP,
+    )
+    private var useBackdrop by prefOption("floating_chat_header_use_backdrop", true)
+    private var blurRadiusDp by prefOption("floating_chat_header_blur_radius", DEFAULT_BLUR_RADIUS)
+    private var dynamicGravityHighlight by prefOption(
+        "floating_chat_header_dynamic_gravity_highlight",
+        false,
     )
     private var headerLayoutStyleName by prefOption(
         "floating_chat_header_layout_style",
@@ -421,10 +457,34 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     /** 每个会话布局当前使用的分体式装饰层。 */
     private val separatedHeaderStates = WeakHashMap<View, SeparatedHeaderState>()
 
+    /** 每个会话布局当前使用的一体式玻璃层。 */
+    private val integratedHeaderGlassStates = WeakHashMap<View, IntegratedHeaderGlassState>()
+
     /** 已报过“找不到标题栏三段结构”的会话布局。 */
     private val separatedHeaderWarned = WeakHashMap<View, Boolean>()
 
     private data class HeaderStyle(val cornerRadiusDp: Int, val elevationDp: Int)
+
+    private data class HeaderGlassConfig(
+        val enabled: Boolean,
+        val cornerRadiusDp: Int,
+        val blurRadiusDp: Int,
+        val dynamicGravityHighlight: Boolean,
+        val elevationDp: Int,
+    )
+
+    private data class SeparatedGlassGeometry(
+        val left: RectF,
+        val title: RectF,
+        val right: RectF,
+    )
+
+    private class IntegratedHeaderGlassState(
+        val header: ViewGroup,
+        val layer: ComposeView,
+        val config: MutableState<HeaderGlassConfig>,
+        var fallbackBackground: Drawable?,
+    )
 
     private data class HeaderVisualState(
         val view: View,
@@ -453,6 +513,9 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         var menuHost: ViewGroup?,
         val decorationLayer: FrameLayout,
         val decoration: SeparatedHeaderDecorationView,
+        val glassLayer: ComposeView,
+        val glassConfig: MutableState<HeaderGlassConfig>,
+        val glassGeometry: MutableState<SeparatedGlassGeometry>,
         val surfaceColor: Int,
         val visualStates: List<HeaderVisualState>,
         val clipStates: List<HeaderClipState>,
@@ -577,6 +640,102 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             if (!rightRect.isEmpty) {
                 val radius = rightRect.height() / 2f
                 canvas.drawRoundRect(rightRect, radius, radius, paint)
+            }
+        }
+    }
+
+    private fun currentHeaderGlassConfig() = HeaderGlassConfig(
+        enabled = useBackdrop,
+        cornerRadiusDp = cornerRadiusDp,
+        blurRadiusDp = blurRadiusDp,
+        dynamicGravityHighlight = dynamicGravityHighlight,
+        elevationDp = elevationDp,
+    )
+
+    @Composable
+    private fun HeaderGlassSurface(
+        backdrop: Backdrop,
+        config: HeaderGlassConfig,
+        modifier: Modifier,
+        shape: Shape,
+        containerColor: ComposeColor,
+        highlight: Highlight,
+    ) {
+        Box(
+            modifier = modifier.floatingGlassSurface(
+                backdrop = backdrop,
+                shape = shape,
+                containerColor = containerColor,
+                blurRadius = config.blurRadiusDp.dp,
+                highlight = highlight,
+            ),
+        )
+    }
+
+    @Composable
+    private fun IntegratedHeaderGlass(
+        sourceView: View,
+        lifecycleOwner: LifecycleOwner,
+        config: HeaderGlassConfig,
+    ) {
+        val isDark = isSystemInDarkTheme()
+        val containerColor = if (isDark) ComposeColor(0xFF191919) else ComposeColor(0xFFF7F7F7)
+        val tilt = rememberFloatingGlassTilt(config.dynamicGravityHighlight)
+        val highlight = rememberFloatingGlassHighlight(tilt, extraDegrees = -45f)
+        HeaderGlassSurface(
+            backdrop = rememberViewBackdrop(sourceView, lifecycleOwner),
+            config = config,
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(config.cornerRadiusDp.dp),
+            containerColor = containerColor,
+            highlight = highlight,
+        )
+    }
+
+    @Composable
+    private fun SeparatedHeaderGlass(
+        sourceView: View,
+        lifecycleOwner: LifecycleOwner,
+        config: HeaderGlassConfig,
+        geometry: SeparatedGlassGeometry,
+    ) {
+        val density = LocalDensity.current
+        val isDark = isSystemInDarkTheme()
+        val containerColor = if (isDark) ComposeColor(0xFF191919) else ComposeColor(0xFFF7F7F7)
+        val shadowAlpha = if (isDark) 0.6f else 0.32f
+        val shadowRadius = (config.elevationDp * 1.5f).dp
+        val backdrop = rememberViewBackdrop(sourceView, lifecycleOwner)
+        val tilt = rememberFloatingGlassTilt(config.dynamicGravityHighlight)
+        val highlight = rememberFloatingGlassHighlight(tilt, extraDegrees = -45f)
+
+        Box(Modifier.fillMaxSize()) {
+            listOf(
+                geometry.left to CircleShape,
+                geometry.title to RoundedCornerShape(config.cornerRadiusDp.dp),
+                geometry.right to CircleShape,
+            ).forEach { (rect, shape) ->
+                if (!rect.isEmpty) {
+                    val width = with(density) { rect.width().toDp() }
+                    val height = with(density) { rect.height().toDp() }
+                    HeaderGlassSurface(
+                        backdrop = backdrop,
+                        config = config,
+                        shape = shape,
+                        containerColor = containerColor,
+                        highlight = highlight,
+                        modifier = Modifier
+                            .offset { IntOffset(rect.left.roundToInt(), rect.top.roundToInt()) }
+                            .size(width, height)
+                            .dropShadow(
+                                shape = shape,
+                                shadow = Shadow(
+                                    radius = shadowRadius,
+                                    color = ComposeColor.Black,
+                                    alpha = shadowAlpha,
+                                ),
+                            ),
+                    )
+                }
             }
         }
     }
@@ -1000,11 +1159,11 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     }
 
     /** 圆角 / 裁剪 / 阴影 / 暗色浮层, 与悬浮输入框同一套绘制属性; 标题栏和标题区挂件共用。 */
-    private fun applyCardStyle(view: View) {
+    private fun applyCardStyle(view: View, applySurface: Boolean = true) {
         val style = HeaderStyle(cornerRadiusDp, elevationDp)
         val density = view.resources.displayMetrics.density
         val expectedElevation = elevationDp * density
-        FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
+        if (applySurface) FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
         // 半屏路径微信会在展开动画结束时清掉 ActionBarContainer 的 outline (m.a()),
         // 只按样式缓存判断会漏掉这次恢复, 所以 outline/elevation 被微信改掉时也要重刷。
         if (headerStyles[view] == style &&
@@ -1028,10 +1187,91 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private fun applyHeaderStyle(layout: View, header: View) {
         if (headerLayoutStyle == HeaderLayoutStyle.INTEGRATED) {
             removeSeparatedHeader(layout)
-            applyCardStyle(header)
+            applyCardStyle(header, applySurface = !useBackdrop)
+            applyIntegratedHeaderGlass(layout, header)
         } else {
+            removeIntegratedHeaderGlass(layout, restoreBackground = true)
             applySeparatedHeaderStyle(layout, header)
         }
+    }
+
+    private fun applyIntegratedHeaderGlass(layout: View, header: View) {
+        // A layout-owned title bar is still part of the capture source until performReparent()
+        // completes. Attaching the glass now would make ViewBackdrop recursively draw itself.
+        if (header.parent === layout && windowBarHeaders[layout] != true) {
+            removeIntegratedHeaderGlass(layout, restoreBackground = true)
+            return
+        }
+
+        val group = header as ViewGroup
+        val config = currentHeaderGlassConfig()
+        var state = integratedHeaderGlassStates[layout]
+        if (state != null && (state.header !== group || state.layer.parent !== group)) {
+            removeIntegratedHeaderGlass(layout, restoreBackground = true)
+            state = null
+        }
+        if (state == null) {
+            val activity = layout.context.activityOrNull() ?: return
+            val lifecycleOwner = LifecycleOwnerProvider.getOrCreate(activity)
+            val configState = mutableStateOf(config)
+            val layer = ComposeView(header.context).apply {
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                isClickable = false
+                isFocusable = false
+                setLifecycleOwner(lifecycleOwner)
+                setContent {
+                    InjectedUiTheme {
+                        val activeConfig by configState
+                        if (activeConfig.enabled) {
+                            IntegratedHeaderGlass(layout, lifecycleOwner, activeConfig)
+                        }
+                    }
+                }
+            }
+            state = IntegratedHeaderGlassState(
+                header = group,
+                layer = layer,
+                config = configState,
+                fallbackBackground = header.background,
+            )
+            integratedHeaderGlassStates[layout] = state
+            group.addView(
+                layer,
+                0,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+
+        val activeState = state ?: return
+        activeState.config.value = config
+        if (config.enabled) {
+            val background = header.background
+            if (background !is ColorDrawable || background.color != Color.TRANSPARENT) {
+                activeState.fallbackBackground = background
+                header.background = ColorDrawable(Color.TRANSPARENT)
+            }
+            activeState.layer.visibility = View.VISIBLE
+        } else {
+            activeState.layer.visibility = View.GONE
+            val background = header.background
+            if (background is ColorDrawable && background.color == Color.TRANSPARENT) {
+                header.background = activeState.fallbackBackground
+            }
+        }
+    }
+
+    private fun removeIntegratedHeaderGlass(layout: View, restoreBackground: Boolean) {
+        val state = integratedHeaderGlassStates.remove(layout) ?: return
+        if (restoreBackground) {
+            val background = state.header.background
+            if (background is ColorDrawable && background.color == Color.TRANSPARENT) {
+                state.header.background = state.fallbackBackground
+            }
+        }
+        if (state.layer.parent === state.header) state.header.removeView(state.layer)
     }
 
     private fun applySeparatedHeaderStyle(layout: View, header: View) {
@@ -1075,6 +1315,12 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             ?: return null
         val menuHost = findMenuHost(parts.right)
         val surfaceColor = sampleHeaderSurfaceColor(header)
+        val activity = layout.context.activityOrNull() ?: return null
+        val lifecycleOwner = LifecycleOwnerProvider.getOrCreate(activity)
+        val glassConfig = mutableStateOf(currentHeaderGlassConfig())
+        val glassGeometry = mutableStateOf(
+            SeparatedGlassGeometry(RectF(), RectF(), RectF()),
+        )
         val visualStates = listOf(header, toolbar, parts.root).distinct().map { view ->
             HeaderVisualState(
                 view = view,
@@ -1095,8 +1341,30 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             isFocusable = false
         }
         val decoration = SeparatedHeaderDecorationView(header.context)
+        val glassLayer = ComposeView(header.context).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isClickable = false
+            isFocusable = false
+            setLifecycleOwner(lifecycleOwner)
+            setContent {
+                InjectedUiTheme {
+                    val activeConfig by glassConfig
+                    val geometry by glassGeometry
+                    if (activeConfig.enabled) {
+                        SeparatedHeaderGlass(layout, lifecycleOwner, activeConfig, geometry)
+                    }
+                }
+            }
+        }
         decorationLayer.addView(
             decoration,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        decorationLayer.addView(
+            glassLayer,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1121,6 +1389,9 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             menuHost = menuHost,
             decorationLayer = decorationLayer,
             decoration = decoration,
+            glassLayer = glassLayer,
+            glassConfig = glassConfig,
+            glassGeometry = glassGeometry,
             surfaceColor = surfaceColor,
             visualStates = visualStates,
             clipStates = clipStates,
@@ -1372,6 +1643,15 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             darkMode = state.root.context.isDarkMode,
             density = density,
         )
+        val glassConfig = currentHeaderGlassConfig()
+        state.glassConfig.value = glassConfig
+        state.glassGeometry.value = SeparatedGlassGeometry(
+            left = RectF(leftCard).apply { offset(shadowPadding.toFloat(), shadowPadding.toFloat()) },
+            title = RectF(titleCard).apply { offset(shadowPadding.toFloat(), shadowPadding.toFloat()) },
+            right = RectF(rightCard).apply { offset(shadowPadding.toFloat(), shadowPadding.toFloat()) },
+        )
+        state.decoration.visibility = if (glassConfig.enabled) View.INVISIBLE else View.VISIBLE
+        state.glassLayer.visibility = if (glassConfig.enabled) View.VISIBLE else View.GONE
     }
 
     private fun syncSeparatedHeaderObservers(state: SeparatedHeaderState) {
@@ -2704,6 +2984,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
 
     private fun disposeTracker(layout: View) {
         removeSeparatedHeader(layout)
+        removeIntegratedHeaderGlass(layout, restoreBackground = true)
         statusBarPreDraws.remove(layout)?.let { listener ->
             runCatching { layout.viewTreeObserver.removeOnPreDrawListener(listener) }
         }
@@ -2848,6 +3129,10 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         }
         separatedHeaderStates.clear()
         separatedHeaderWarned.clear()
+        integratedHeaderGlassStates.keys.toList().forEach { layout ->
+            removeIntegratedHeaderGlass(layout, restoreBackground = true)
+        }
+        integratedHeaderGlassStates.clear()
         statusBarPreDraws.clear()
         statusBarOffsets.clear()
         statusBarWrappersNeutralized.clear()
@@ -2863,6 +3148,9 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             var extraGap by remember { mutableIntStateOf(extraGapDp) }
             var elevation by remember { mutableIntStateOf(elevationDp) }
             var componentGap by remember { mutableIntStateOf(componentGapDp) }
+            var backdropEnabled by remember { mutableStateOf(useBackdrop) }
+            var blurRadius by remember { mutableIntStateOf(blurRadiusDp) }
+            var dynamicHighlight by remember { mutableStateOf(dynamicGravityHighlight) }
 
             AlertDialogContent(
                 title = { Text(stringResource(R.string.chat_floating_header_title)) },
@@ -2875,6 +3163,55 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
                                     title = stringResource(R.string.chat_floating_header_restart_hint),
                                     description = stringResource(R.string.chat_floating_header_summary),
                                 )
+                            }
+                            item(key = "liquid_glass") {
+                                SwitchWidget(
+                                    iconPlaceholder = false,
+                                    title = stringResource(R.string.nav_use_liquid_glass),
+                                    description = null,
+                                    checked = backdropEnabled,
+                                    onCheckedChange = {
+                                        backdropEnabled = it
+                                        useBackdrop = it
+                                        scheduleAllLayouts(RECONCILE_LAYOUT)
+                                    },
+                                )
+                            }
+                            item(
+                                key = "dynamic_gravity_highlight",
+                                animatedVisibility = backdropEnabled,
+                            ) {
+                                SwitchWidget(
+                                    iconPlaceholder = false,
+                                    title = stringResource(R.string.nav_dynamic_gravity_highlight),
+                                    description = stringResource(R.string.nav_dynamic_gravity_highlight_summary),
+                                    checked = dynamicHighlight,
+                                    onCheckedChange = {
+                                        dynamicHighlight = it
+                                        dynamicGravityHighlight = it
+                                        scheduleAllLayouts(RECONCILE_LAYOUT)
+                                    },
+                                )
+                            }
+                            item(
+                                key = "blur_radius",
+                                animatedVisibility = backdropEnabled,
+                            ) {
+                                BaseItemContainer {
+                                    IntNumberPickerWidget(
+                                        title = stringResource(R.string.nav_blur_radius),
+                                        value = blurRadius,
+                                        startInt = MIN_BLUR_RADIUS,
+                                        endInt = MAX_BLUR_RADIUS,
+                                        stepSize = 1,
+                                        valueSuffix = "px",
+                                        onValueChange = {
+                                            blurRadius = it
+                                            blurRadiusDp = it
+                                            scheduleAllLayouts(RECONCILE_LAYOUT)
+                                        },
+                                    )
+                                }
                             }
                             item(key = "layout_style") {
                                 DropDownMenuWidget(
