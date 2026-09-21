@@ -31,13 +31,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     if: |
-      (github.event_name == 'workflow_dispatch' && github.repository == 'Ujhhgtg/WeKit-Dev') ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
       (
-        !startsWith(github.event.head_commit.message, '[skip ci]') && 
-        (
-          github.event_name == 'pull_request' ||
-          (github.repository == 'Ujhhgtg/WeKit-Dev' && github.ref == 'refs/heads/master')
-        )
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/master' &&
+        !startsWith(github.event.head_commit.message, '[skip ci]')
       )
     steps:
       - name: Checkout
@@ -113,12 +112,12 @@ jobs:
           ./x i18n-check
 
       - name: Decode keystore
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Ujhhgtg/WeKit-Dev'
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/wekit-keystore.jks
 
       - name: Build Release (Signed)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.repository == 'Ujhhgtg/WeKit-Dev'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEKIT_KEYSTORE_FILE: ${{ runner.temp }}/wekit-keystore.jks
@@ -127,8 +126,8 @@ jobs:
           WEKIT_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./x build --release
 
-      - name: Build Release (Unsigned)
-        if: github.event_name == 'pull_request'
+      - name: Build Release (Fork/PR)
+        if: github.event_name == 'pull_request' || github.repository != 'Ujhhgtg/WeKit-Dev'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./x build --release
