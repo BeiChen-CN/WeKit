@@ -1211,6 +1211,8 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             state = null
         }
         if (state == null) {
+            val headerHeight = group.height.takeIf { it > 0 } ?: group.measuredHeight
+            if (headerHeight <= 0) return
             val activity = layout.context.activityOrNull() ?: return
             val lifecycleOwner = LifecycleOwnerProvider.getOrCreate(activity)
             val configState = mutableStateOf(config)
@@ -1240,12 +1242,18 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
                 0,
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    headerHeight,
                 ),
             )
         }
 
         val activeState = state ?: return
+        val headerHeight = group.height
+        val layerParams = activeState.layer.layoutParams as FrameLayout.LayoutParams
+        if (headerHeight > 0 && layerParams.height != headerHeight) {
+            layerParams.height = headerHeight
+            activeState.layer.layoutParams = layerParams
+        }
         activeState.config.value = config
         if (config.enabled) {
             val background = header.background
