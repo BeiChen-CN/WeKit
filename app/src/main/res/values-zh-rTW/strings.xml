@@ -579,8 +579,10 @@
     <string name="feature_replace_navigation_bar_name">美化首頁底部導航欄</string>
     <string name="feature_replace_navigation_bar_description">將首頁底欄替換爲 Material Design 或 Backdrop 風格</string>
     <string name="feature_floating_main_header_name">主頁懸浮頂欄</string>
-    <string name="feature_floating_main_header_description">將主頁、通訊錄、發現和我的共用頂欄顯示為懸浮液態玻璃卡片</string>
-    <string name="main_floating_header_summary">僅套用於主頁四個標籤，系統狀態列和聊天標題列不受影響</string>
+    <string name="feature_floating_main_header_description">將主頁、通訊錄和發現的共用頂欄顯示為懸浮液態玻璃卡片</string>
+    <string name="main_floating_header_summary">僅套用於主頁、通訊錄和發現；我、系統狀態列和聊天標題列不受影響</string>
+    <string name="main_floating_header_hide_search">僅主頁隱藏搜尋鍵</string>
+    <string name="main_floating_header_hide_plus">僅主頁隱藏加號鍵</string>
     <string name="feature_themes_name">主題</string>
     <string name="feature_themes_description">應用 THEMES_PATH 中的主題，切換後重啓微信生效</string>
     <string name="feature_home_side_panel_name">主頁側滑面板</string>

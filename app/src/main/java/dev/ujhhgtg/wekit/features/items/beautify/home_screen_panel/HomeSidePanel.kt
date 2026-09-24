@@ -1239,7 +1239,8 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
 
         private fun syncToolbarProfileVisibility() {
             val state = panelState.uiState.value
-            val showProfile = state.showToolbarProfile && selectedTabIndex == HOME_TAB_INDEX
+            val showProfile = !chattingVisible && state.showToolbarProfile &&
+                selectedTabIndex == HOME_TAB_INDEX
             toolbarProfileBindings.values.forEach { binding ->
                 binding.composeView.visibility = if (showProfile) View.VISIBLE else View.GONE
             }
@@ -1254,6 +1255,21 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
             hide: Boolean,
         ) {
             val currentTitles = bindings.mapTo(linkedSetOf()) { it.nativeTitle }
+            if (hide) {
+                // WeChat's centered action-bar title uses android.R.id.title, while the
+                // profile host also contains a separate android.R.id.text1 title.
+                // Both must be hidden on Home; the latter alone leaves “微信” visible.
+                bindings.forEach { binding ->
+                    var ancestor: View? = binding.host
+                    while (ancestor != null &&
+                        ancestor.javaClass.name != "androidx.appcompat.widget.ActionBarContainer"
+                    ) {
+                        ancestor = ancestor.parent as? View
+                    }
+                    ancestor?.findViewById<TextView>(android.R.id.title)
+                        ?.let(currentTitles::add)
+                }
+            }
             val iterator = nativeTitleVisibilities.iterator()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
