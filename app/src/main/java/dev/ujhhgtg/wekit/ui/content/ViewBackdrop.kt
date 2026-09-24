@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -43,6 +44,7 @@ import top.yukonga.miuix.kmp.blur.Backdrop
  *
  * This backdrop instead records `sourceView` (WeChat's ViewPager) into the layer whenever the
  * source content redraws, so the real chat / contacts / discover content shows through the glass.
+ * [fallbackColor] fills parts of the consumer that lie outside the captured source bounds.
  * It cannot capture hardware surfaces (SurfaceView / TextureView — e.g. video calls or Channels),
  * which draw blank behind the bar; that is an accepted limitation of View.draw().
  */
@@ -50,13 +52,14 @@ import top.yukonga.miuix.kmp.blur.Backdrop
 fun rememberViewBackdrop(
     sourceView: View,
     lifecycleOwner: LifecycleOwner,
+    fallbackColor: Color? = null,
 ): ViewBackdrop {
     val graphicsLayer = rememberGraphicsLayer()
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
 
     val backdrop = remember(graphicsLayer) { ViewBackdrop(graphicsLayer) }
-    backdrop.updateEnvironment(sourceView, density, layoutDirection)
+    backdrop.updateEnvironment(sourceView, density, layoutDirection, fallbackColor)
 
     // Ask the glass to re-capture whenever WeChat's own content is about to redraw — a scroll, a
     // tab switch (setCurrentItem scrolls the pager), an incoming message, etc. `bumpGeneration` writes
@@ -127,6 +130,7 @@ class ViewBackdrop constructor(
     var sourceView: View? = null
     var density: Density = Density(1f)
     var layoutDirection: LayoutDirection = LayoutDirection.Ltr
+    private var fallbackColor: Color? = null
 
     // Bumped whenever the source content redraws. Read inside drawBackdrop so the draw phase
     // subscribes to it: a change re-runs the backdrop draw node's layer recording (and thus our
@@ -155,6 +159,7 @@ class ViewBackdrop constructor(
         view: View,
         density: Density,
         layoutDirection: LayoutDirection,
+        fallbackColor: Color?,
     ) {
         if (sourceView !== view) {
             captureState.invalidate()
@@ -165,6 +170,10 @@ class ViewBackdrop constructor(
         sourceView = view
         this.density = density
         this.layoutDirection = layoutDirection
+        if (this.fallbackColor != fallbackColor) {
+            this.fallbackColor = fallbackColor
+            generation++
+        }
     }
 
     fun bumpGeneration() {
@@ -254,6 +263,9 @@ class ViewBackdrop constructor(
         downscaleFactor: Int,
     ) {
         @Suppress("UNUSED_EXPRESSION") generation
+        // The pager can start below a floating action bar. Fill the uncaptured region before
+        // aligning its pixels; otherwise the blur shader turns that transparent area black.
+        fallbackColor?.let { drawRect(it) }
         val view = sourceView ?: return noCapture()
         val key = currentCaptureKey(view) ?: return noCapture()
         val barCoordinates = coordinates ?: return noCapture()

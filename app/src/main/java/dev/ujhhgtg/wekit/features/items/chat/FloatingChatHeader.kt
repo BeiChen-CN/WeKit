@@ -1820,8 +1820,14 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         // 实时算而不是用重挂时的快照: 聊天页 edge-to-edge 后 paddingTop 会被清零,
         // 标题卡需要落在 状态栏 inset + 顶部间距 的位置。
         val topPx = if (windowBarHeaders[layout] == true) {
-            // 窗口级 ActionBarContainer 的坐标原点已经包含系统栏偏移, 直接加状态栏 inset 即可
-            statusBarOffset(layout) + (topGapDp * density).toInt()
+            // 独立聊天窗口的 ActionBarOverlayLayout 可能已经位于状态栏下方。
+            // 从实际窗口坐标反推 margin，避免通知入口把系统栏 inset 加两次。
+            val parent = header.parent as View
+            val parentTop = IntArray(2).also(parent::getLocationInWindow)[1]
+            val rootTop = IntArray(2).also(layout.rootView::getLocationInWindow)[1]
+            val topWithoutMargin = header.top - lp.topMargin
+            rootTop + statusBarOffset(layout) + (topGapDp * density).toInt() -
+                parentTop - topWithoutMargin
         } else {
             layout.top + layout.paddingTop +
                 statusBarOffset(layout) + (topGapDp * density).toInt()

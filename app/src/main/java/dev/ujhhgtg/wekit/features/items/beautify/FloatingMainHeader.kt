@@ -56,7 +56,9 @@ import dev.ujhhgtg.wekit.ui.utils.allViews
 import dev.ujhhgtg.wekit.ui.utils.setLifecycleOwner
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.ui.utils.theme.InjectedUiTheme
+import dev.ujhhgtg.wekit.utils.HookHandle
 import dev.ujhhgtg.wekit.utils.WeLogger
+import dev.ujhhgtg.wekit.utils.hookBeforeDirectly
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
@@ -197,9 +199,12 @@ object FloatingMainHeader : ClickableFeature() {
             val viewPager = thisObject!!.reflekt()
                 .firstField { name = "mViewPager" }
                 .get()!! as WxViewPager
+            val tabsAdapter = thisObject!!.reflekt()
+                .firstField { name = "mTabsAdapter" }
+                .get()!!
             if (sessions[viewPager]?.get() != null) return@hookAfter
 
-            val session = MainHeaderSession(activity, viewPager).also { it.attach() }
+            val session = MainHeaderSession(activity, viewPager, tabsAdapter).also { it.attach() }
             sessions[viewPager] = WeakReference(session)
         }
     }
@@ -258,6 +263,7 @@ object FloatingMainHeader : ClickableFeature() {
     private class MainHeaderSession(
         private val activity: Activity,
         private val viewPager: WxViewPager,
+        private val tabsAdapter: Any,
     ) {
         private val decorRoot = activity.window.decorView as ViewGroup
         private val lifecycleOwner = LifecycleOwnerProvider.getOrCreate(activity)
@@ -265,6 +271,8 @@ object FloatingMainHeader : ClickableFeature() {
         private var attached = false
         private var syncPosted = false
         private var headerState: HeaderState? = null
+        private var selectedTabIndex = viewPager.currentItem
+        private var tabSelectionHook: HookHandle? = null
         private var pendingTransitionLayoutListener: View.OnLayoutChangeListener? = null
         private val invalidHeightHeaders = WeakHashMap<View, Boolean>()
 
@@ -291,6 +299,16 @@ object FloatingMainHeader : ClickableFeature() {
         fun attach() {
             if (attached) return
             attached = true
+            tabSelectionHook = tabsAdapter.reflekt().firstMethod {
+                name = "onPageSelected"
+                parameterCount = 1
+            }.hookBeforeDirectly {
+                if (thisObject !== tabsAdapter) return@hookBeforeDirectly
+                // ReplaceNavigationBar maps a reordered pager index back to WeChat's logical
+                // tab index at priority 100, before this default-priority callback.
+                selectedTabIndex = args[0] as Int
+                scheduleSync()
+            }
             decorRoot.addOnLayoutChangeListener(decorLayoutListener)
             scheduleSync()
         }
@@ -298,6 +316,8 @@ object FloatingMainHeader : ClickableFeature() {
         fun detach() {
             if (!attached) return
             attached = false
+            tabSelectionHook?.unhook()
+            tabSelectionHook = null
             decorRoot.removeCallbacks(syncRunnable)
             decorRoot.removeOnLayoutChangeListener(decorLayoutListener)
             pendingTransitionLayoutListener?.let(transitionHost::removeOnLayoutChangeListener)
@@ -340,7 +360,7 @@ object FloatingMainHeader : ClickableFeature() {
         }
 
         private fun sync() {
-            if ((activity as LauncherUI).currentFragmet != null) {
+            if ((activity as LauncherUI).currentFragmet != null || selectedTabIndex == 3) {
                 removeHeaderState()
                 return
             }
@@ -545,14 +565,18 @@ object FloatingMainHeader : ClickableFeature() {
         lifecycleOwner: androidx.lifecycle.LifecycleOwner,
         config: GlassConfig,
     ) {
-        val backdrop = rememberViewBackdrop(viewPager, lifecycleOwner)
-        val tilt = rememberFloatingGlassTilt(config.dynamicGravityHighlight)
-        val highlight = rememberFloatingGlassHighlight(tilt, 0f)
         val containerColor = if (isSystemInDarkTheme()) {
             Color(0xFF191919)
         } else {
             Color(0xFFF7F7F7)
         }
+        val backdrop = rememberViewBackdrop(
+            viewPager,
+            lifecycleOwner,
+            if (config.blurRadiusDp > 0) containerColor else null,
+        )
+        val tilt = rememberFloatingGlassTilt(config.dynamicGravityHighlight)
+        val highlight = rememberFloatingGlassHighlight(tilt, 0f)
         val shape: Shape = RoundedCornerShape(config.cornerRadiusDp.dp)
         androidx.compose.foundation.layout.Box(
             modifier = Modifier
