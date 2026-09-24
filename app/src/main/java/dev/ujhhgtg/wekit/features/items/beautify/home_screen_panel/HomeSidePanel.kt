@@ -338,7 +338,6 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
 
     private data class ToolbarProfileBinding(
         val host: RelativeLayout,
-        val nativeTitle: TextView,
         val composeView: ComposeView,
     )
 
@@ -442,7 +441,6 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
         private val observedToolbarProfileHosts = linkedSetOf<RelativeLayout>()
         private val homeToolbarHosts = linkedSetOf<RelativeLayout>()
         private val chattingToolbarHosts = linkedSetOf<RelativeLayout>()
-        private val nativeTitleVisibilities = linkedMapOf<TextView, Int>()
         private val tabsAdapterHookHandles = mutableListOf<HookHandle>()
         private val observedViews = WeakHashMap<View, ObservedViewListeners>()
         private var pendingTransitionLayoutListener: View.OnLayoutChangeListener? = null
@@ -527,7 +525,7 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
             }
             stateScope.launch {
                 panelState.uiState
-                    .map { it.showToolbarProfile to it.hideWeChatTitle }
+                    .map { it.showToolbarProfile }
                     .distinctUntilChanged()
                     .collect { syncToolbarProfileVisibility() }
             }
@@ -1119,14 +1117,14 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
                 }
             }
 
-            hosts.forEach { (host, nativeTitle) ->
+            hosts.forEach { (host, _) ->
                 if (
                     !chattingVisible &&
                     (host in homeToolbarHosts || host !in chattingToolbarHosts) &&
                     host !in toolbarProfileBindings
                 ) {
                     homeToolbarHosts += host
-                    toolbarProfileBindings[host] = createToolbarProfileBinding(host, nativeTitle)
+                    toolbarProfileBindings[host] = createToolbarProfileBinding(host)
                 }
             }
             syncToolbarProfileVisibility()
@@ -1208,7 +1206,6 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
 
         private fun createToolbarProfileBinding(
             host: RelativeLayout,
-            nativeTitle: TextView,
         ): ToolbarProfileBinding {
             val composeView = ComposeView(activity).apply {
                 setBackgroundColor(AndroidColor.TRANSPARENT)
@@ -1234,7 +1231,7 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
                     addRule(RelativeLayout.CENTER_VERTICAL)
                 },
             )
-            return ToolbarProfileBinding(host, nativeTitle, composeView)
+            return ToolbarProfileBinding(host, composeView)
         }
 
         private fun syncToolbarProfileVisibility() {
@@ -1244,52 +1241,9 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
             toolbarProfileBindings.values.forEach { binding ->
                 binding.composeView.visibility = if (showProfile) View.VISIBLE else View.GONE
             }
-            syncNativeTitleVisibility(
-                bindings = toolbarProfileBindings.values,
-                hide = showProfile && state.hideWeChatTitle,
-            )
-        }
-
-        private fun syncNativeTitleVisibility(
-            bindings: Collection<ToolbarProfileBinding>,
-            hide: Boolean,
-        ) {
-            val currentTitles = bindings.mapTo(linkedSetOf()) { it.nativeTitle }
-            if (hide) {
-                // WeChat's centered action-bar title uses android.R.id.title, while the
-                // profile host also contains a separate android.R.id.text1 title.
-                // Both must be hidden on Home; the latter alone leaves “微信” visible.
-                bindings.forEach { binding ->
-                    var ancestor: View? = binding.host
-                    while (ancestor != null &&
-                        ancestor.javaClass.name != "androidx.appcompat.widget.ActionBarContainer"
-                    ) {
-                        ancestor = ancestor.parent as? View
-                    }
-                    ancestor?.findViewById<TextView>(android.R.id.title)
-                        ?.let(currentTitles::add)
-                }
-            }
-            val iterator = nativeTitleVisibilities.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (!hide || entry.key !in currentTitles) {
-                    entry.key.visibility = entry.value
-                    iterator.remove()
-                }
-            }
-            if (!hide) return
-            currentTitles.forEach { title ->
-                nativeTitleVisibilities.putIfAbsent(title, title.visibility)
-                title.visibility = View.GONE
-            }
         }
 
         private fun clearToolbarProfileBindings() {
-            nativeTitleVisibilities.forEach { (title, visibility) ->
-                title.visibility = visibility
-            }
-            nativeTitleVisibilities.clear()
             toolbarProfileBindings.values.forEach(::disposeToolbarProfileBinding)
             toolbarProfileBindings.clear()
         }

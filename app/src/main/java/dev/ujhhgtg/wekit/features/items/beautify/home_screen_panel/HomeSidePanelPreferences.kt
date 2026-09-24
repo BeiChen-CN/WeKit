@@ -23,7 +23,6 @@ object HomeSidePanelPreferences {
     private const val TAG = "HomeSidePanelPreferences"
 
     var showToolbarProfile by prefOption(HomeSidePanelPreferenceKeys.SHOW_TOOLBAR_PROFILE, true)
-    var hideWeChatTitle by prefOption(HomeSidePanelPreferenceKeys.HIDE_WECHAT_TITLE, false)
 
     var layoutRaw: String?
         get() = WePrefs.getString(HomeSidePanelPreferenceKeys.LAYOUT)

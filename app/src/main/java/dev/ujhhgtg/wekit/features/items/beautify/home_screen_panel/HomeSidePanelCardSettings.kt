@@ -91,15 +91,6 @@ fun HomeSidePanelPanelSettings(
                     onCheckedChange = panelState::setShowToolbarProfile,
                 )
             }
-            item {
-                SwitchWidget(
-                    iconPlaceholder = false,
-                    title = stringResource(R.string.home_side_panel_hide_wechat_title),
-                    checked = state.hideWeChatTitle,
-                    enabled = state.showToolbarProfile,
-                    onCheckedChange = panelState::setHideWeChatTitle,
-                )
-            }
         }
     }
 }

@@ -45,6 +45,9 @@ import top.yukonga.miuix.kmp.blur.Backdrop
  * This backdrop instead records `sourceView` (WeChat's ViewPager) into the layer whenever the
  * source content redraws, so the real chat / contacts / discover content shows through the glass.
  * [fallbackColor] fills parts of the consumer that lie outside the captured source bounds.
+ * [alignSourceTopWhenAbove] projects the first visible source pixels into a consumer above the
+ * source. This is useful for host pages whose content starts below an overlay action bar: without
+ * it, the bar samples no pixels and only the fallback tint is visible.
  * It cannot capture hardware surfaces (SurfaceView / TextureView — e.g. video calls or Channels),
  * which draw blank behind the bar; that is an accepted limitation of View.draw().
  */
@@ -53,13 +56,20 @@ fun rememberViewBackdrop(
     sourceView: View,
     lifecycleOwner: LifecycleOwner,
     fallbackColor: Color? = null,
+    alignSourceTopWhenAbove: Boolean = false,
 ): ViewBackdrop {
     val graphicsLayer = rememberGraphicsLayer()
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
 
     val backdrop = remember(graphicsLayer) { ViewBackdrop(graphicsLayer) }
-    backdrop.updateEnvironment(sourceView, density, layoutDirection, fallbackColor)
+    backdrop.updateEnvironment(
+        sourceView,
+        density,
+        layoutDirection,
+        fallbackColor,
+        alignSourceTopWhenAbove,
+    )
 
     // Ask the glass to re-capture whenever WeChat's own content is about to redraw — a scroll, a
     // tab switch (setCurrentItem scrolls the pager), an incoming message, etc. `bumpGeneration` writes
@@ -131,6 +141,7 @@ class ViewBackdrop constructor(
     var density: Density = Density(1f)
     var layoutDirection: LayoutDirection = LayoutDirection.Ltr
     private var fallbackColor: Color? = null
+    private var alignSourceTopWhenAbove = false
 
     // Bumped whenever the source content redraws. Read inside drawBackdrop so the draw phase
     // subscribes to it: a change re-runs the backdrop draw node's layer recording (and thus our
@@ -160,6 +171,7 @@ class ViewBackdrop constructor(
         density: Density,
         layoutDirection: LayoutDirection,
         fallbackColor: Color?,
+        alignSourceTopWhenAbove: Boolean,
     ) {
         if (sourceView !== view) {
             captureState.invalidate()
@@ -172,6 +184,10 @@ class ViewBackdrop constructor(
         this.layoutDirection = layoutDirection
         if (this.fallbackColor != fallbackColor) {
             this.fallbackColor = fallbackColor
+            generation++
+        }
+        if (this.alignSourceTopWhenAbove != alignSourceTopWhenAbove) {
+            this.alignSourceTopWhenAbove = alignSourceTopWhenAbove
             generation++
         }
     }
@@ -291,11 +307,14 @@ class ViewBackdrop constructor(
 
         // Position of the bar (this consumer) relative to the captured source view, i.e. how far
         // into the source the region behind the bar sits. We translate the layer by -offset so that
-        // region aligns under the bar.
+        // region aligns under the bar. Some host pages start below the bar; opt-in consumers can
+        // sample from the source's top edge rather than drawing empty space above it.
         val barInWindow = barCoordinates.positionInWindow()
         val viewLocation = IntArray(2).also { view.getLocationInWindow(it) }
         val offsetX = barInWindow.x - viewLocation[0]
-        val offsetY = barInWindow.y - viewLocation[1]
+        val offsetY = (barInWindow.y - viewLocation[1]).let { offset ->
+            if (alignSourceTopWhenAbove) offset.coerceAtLeast(0f) else offset
+        }
 
         if (downscaleFactor > 1) {
             // Alignment happens in downscaled space; round to an even pixel (matching LayerBackdrop's

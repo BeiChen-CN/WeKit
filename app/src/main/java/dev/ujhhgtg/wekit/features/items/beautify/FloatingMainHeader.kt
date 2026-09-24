@@ -5,8 +5,6 @@ import android.app.Activity
 import android.graphics.Outline
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
-import android.view.Menu
-import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -120,13 +118,12 @@ object FloatingMainHeader : ClickableFeature() {
         "floating_main_header_elevation",
         DEFAULT_ELEVATION,
     )
-    private var hideSearchOnHome by prefOption("floating_main_header_hide_search_on_home", false)
-    private var hidePlusOnHome by prefOption("floating_main_header_hide_plus_on_home", false)
 
     private data class GlassConfig(
         val blurRadiusDp: Int,
         val dynamicGravityHighlight: Boolean,
         val cornerRadiusDp: Int,
+        val alignSourceTopWhenAbove: Boolean,
     )
 
     private data class HeaderGeometry(
@@ -196,13 +193,6 @@ object FloatingMainHeader : ClickableFeature() {
         }.hookAfter {
             removeSessionsForActivity(thisObject as Activity)
         }
-        LauncherUI::class.reflekt().firstMethod {
-            name = "onCreateOptionsMenu"
-            parameters(Menu::class)
-        }.hookAfter {
-            sessionFor(thisObject as Activity)?.onMenuCreated(args[0] as Menu)
-        }
-
         WeMainActivityBeautifyApi.methodDoOnCreate.hookAfter {
             val activity = thisObject!!.reflekt()
                 .firstField { type = "com.tencent.mm.ui.MMFragmentActivity" }
@@ -258,10 +248,11 @@ object FloatingMainHeader : ClickableFeature() {
         sessions.values.mapNotNull { it.get() }.forEach(MainHeaderSession::scheduleSync)
     }
 
-    private fun currentGlassConfig() = GlassConfig(
+    private fun currentGlassConfig(tabIndex: Int) = GlassConfig(
         blurRadiusDp = blurRadiusDp,
         dynamicGravityHighlight = dynamicGravityHighlight,
         cornerRadiusDp = cornerRadiusDp,
+        alignSourceTopWhenAbove = tabIndex == 1 || tabIndex == 2,
     )
 
     private fun currentGeometry() = HeaderGeometry(
@@ -286,10 +277,6 @@ object FloatingMainHeader : ClickableFeature() {
         private var tabSelectionHook: HookHandle? = null
         private var pendingTransitionLayoutListener: View.OnLayoutChangeListener? = null
         private val invalidHeightHeaders = WeakHashMap<View, Boolean>()
-        private var optionsMenu: Menu? = null
-        private var searchItemId: Int? = null
-        private var plusItemId: Int? = null
-        private val hiddenMenuItems = linkedMapOf<MenuItem, Boolean>()
 
         private val syncRunnable = Runnable {
             syncPosted = false
@@ -303,20 +290,6 @@ object FloatingMainHeader : ClickableFeature() {
         }
 
         fun ownsActivity(candidate: Activity): Boolean = activity === candidate
-
-        fun onMenuCreated(menu: Menu) {
-            restoreMenuItems()
-            optionsMenu = menu
-            if (menu.size() != 2) {
-                searchItemId = null
-                plusItemId = null
-                WeLogger.e(TAG, "expected two LauncherUI menu items, found ${menu.size()}")
-                return
-            }
-            searchItemId = menu.getItem(0).itemId
-            plusItemId = menu.getItem(1).itemId
-            scheduleSync()
-        }
 
         fun onHostOverlayModeChanged(overlay: View, requested: Boolean) {
             if (headerState?.overlayLayout !== overlay || requested) return
@@ -352,9 +325,6 @@ object FloatingMainHeader : ClickableFeature() {
             pendingTransitionLayoutListener?.let(transitionHost::removeOnLayoutChangeListener)
             pendingTransitionLayoutListener = null
             removeHeaderState()
-            optionsMenu = null
-            searchItemId = null
-            plusItemId = null
             invalidHeightHeaders.clear()
         }
 
@@ -414,31 +384,8 @@ object FloatingMainHeader : ClickableFeature() {
                 params.height = height
                 state.layer.layoutParams = params
             }
-            state.glassConfig.value = currentGlassConfig()
+            state.glassConfig.value = currentGlassConfig(selectedTabIndex)
             applyGeometry(state, currentGeometry())
-            syncHomeMenuItems(selectedTabIndex == 0)
-        }
-
-        private fun syncHomeMenuItems(isHome: Boolean) {
-            val menu = optionsMenu ?: return
-            setMenuItemHidden(menu, searchItemId, isHome && hideSearchOnHome)
-            setMenuItemHidden(menu, plusItemId, isHome && hidePlusOnHome)
-        }
-
-        private fun setMenuItemHidden(menu: Menu, itemId: Int?, hide: Boolean) {
-            if (itemId == null) return
-            val item = menu.findItem(itemId) ?: return
-            if (hide) {
-                hiddenMenuItems.putIfAbsent(item, item.isVisible)
-                item.isVisible = false
-            } else {
-                hiddenMenuItems.remove(item)?.let { item.isVisible = it }
-            }
-        }
-
-        private fun restoreMenuItems() {
-            hiddenMenuItems.forEach { (item, visible) -> item.isVisible = visible }
-            hiddenMenuItems.clear()
         }
 
         private fun findMainHeader(): ViewGroup? {
@@ -476,7 +423,7 @@ object FloatingMainHeader : ClickableFeature() {
             val margins = header.layoutParams as ViewGroup.MarginLayoutParams
             val overlayLayout = findOverlayLayout(header)
 
-            val configState = mutableStateOf(currentGlassConfig())
+            val configState = mutableStateOf(currentGlassConfig(selectedTabIndex))
             val layer = ComposeView(header.context).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 isClickable = false
@@ -566,7 +513,6 @@ object FloatingMainHeader : ClickableFeature() {
         }
 
         private fun removeHeaderState() {
-            restoreMenuItems()
             val state = headerState ?: return
             headerState = null
             val header = state.header
@@ -634,6 +580,7 @@ object FloatingMainHeader : ClickableFeature() {
             } else {
                 null
             },
+            alignSourceTopWhenAbove = config.alignSourceTopWhenAbove,
         )
         val tilt = rememberFloatingGlassTilt(config.dynamicGravityHighlight)
         val highlight = rememberFloatingGlassHighlight(tilt, 0f)
@@ -659,8 +606,6 @@ object FloatingMainHeader : ClickableFeature() {
             var side by remember { mutableIntStateOf(sideMarginDp) }
             var topGap by remember { mutableIntStateOf(topGapDp) }
             var elevation by remember { mutableIntStateOf(elevationDp) }
-            var hideSearch by remember { mutableStateOf(hideSearchOnHome) }
-            var hidePlus by remember { mutableStateOf(hidePlusOnHome) }
 
             AlertDialogContent(
                 title = { Text(stringResource(R.string.feature_floating_main_header_name)) },
@@ -683,30 +628,6 @@ object FloatingMainHeader : ClickableFeature() {
                                     onCheckedChange = {
                                         dynamicHighlight = it
                                         dynamicGravityHighlight = it
-                                        scheduleAllSessions()
-                                    },
-                                )
-                            }
-                            item(key = "hide_search_on_home") {
-                                SwitchWidget(
-                                    iconPlaceholder = false,
-                                    title = stringResource(R.string.main_floating_header_hide_search),
-                                    checked = hideSearch,
-                                    onCheckedChange = {
-                                        hideSearch = it
-                                        hideSearchOnHome = it
-                                        scheduleAllSessions()
-                                    },
-                                )
-                            }
-                            item(key = "hide_plus_on_home") {
-                                SwitchWidget(
-                                    iconPlaceholder = false,
-                                    title = stringResource(R.string.main_floating_header_hide_plus),
-                                    checked = hidePlus,
-                                    onCheckedChange = {
-                                        hidePlus = it
-                                        hidePlusOnHome = it
                                         scheduleAllSessions()
                                     },
                                 )

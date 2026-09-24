@@ -94,6 +94,7 @@
 * [莫奈引擎](features/beautify/monet-engine.md)
 * [主屏幕添加 FAB](features/beautify/add-main-screen-fab.md)
 * [主页悬浮顶栏](features/beautify/floating-main-header.md)
+* [主页原生顶栏控件](features/beautify/home-header-controls.md)
 * [美化首页底部导航栏](features/beautify/replace-navigation-bar.md)
 * [「我」页面精简](features/beautify/hide-me-tab-page-items.md)
 * [对话框窗口级背景模糊](features/beautify/apply-dialog-background-blur.md)

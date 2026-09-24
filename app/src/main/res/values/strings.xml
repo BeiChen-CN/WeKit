@@ -620,8 +620,11 @@
     <string name="feature_floating_main_header_name">Floating home header</string>
     <string name="feature_floating_main_header_description">Display the shared header of Chats, Contacts, and Discover as a floating liquid-glass card</string>
     <string name="main_floating_header_summary">Applies to Chats, Contacts, and Discover; Me, the status bar, and chat headers are unchanged</string>
-    <string name="main_floating_header_hide_search">Hide search on Home tab</string>
-    <string name="main_floating_header_hide_plus">Hide plus button on Home tab</string>
+    <string name="feature_home_header_controls_name">Home native header controls</string>
+    <string name="feature_home_header_controls_description">Independently hide the native WeChat title, search, and plus buttons on the Home tab</string>
+    <string name="home_header_controls_hide_title">Hide WeChat title on Home tab</string>
+    <string name="home_header_controls_hide_search">Hide search on Home tab</string>
+    <string name="home_header_controls_hide_plus">Hide plus button on Home tab</string>
     <string name="feature_themes_name">Themes</string>
     <string name="feature_themes_description">Apply the theme in THEMES_PATH and restart WeChat after switching to take effect.</string>
     <string name="feature_home_side_panel_name">Home side panel</string>
@@ -3198,7 +3201,6 @@
     <string name="home_side_panel_hide_balance_summary">Show ****** when the side panel opens</string>
     <string name="home_side_panel_hide_balance_details">When enabled, tap the wallet card to temporarily show or hide the balance. Closing the side panel restores the hidden state. Temporary state is not saved.</string>
     <string name="home_side_panel_show_toolbar_profile">Show the “Me” widget in the WeChat title bar</string>
-    <string name="home_side_panel_hide_wechat_title">Hide the WeChat title in the title bar</string>
     <string name="home_side_panel_weather_settings">Weather settings</string>
     <string name="home_side_panel_current_city">Current city: %1$s %2$s</string>
     <string name="home_side_panel_auto_detect">Auto-detect</string>

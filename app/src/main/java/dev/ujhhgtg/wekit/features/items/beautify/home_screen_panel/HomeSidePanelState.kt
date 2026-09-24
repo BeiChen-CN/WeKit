@@ -44,7 +44,6 @@ data class HomeSidePanelUiState(
     val editing: Boolean,
     val initialized: Boolean,
     val showToolbarProfile: Boolean,
-    val hideWeChatTitle: Boolean,
     val imageImportingCardIds: Set<String> = emptySet(),
 )
 
@@ -106,7 +105,6 @@ class HomeSidePanelState(
             editing = false,
             initialized = false,
             showToolbarProfile = HomeSidePanelPreferences.showToolbarProfile,
-            hideWeChatTitle = HomeSidePanelPreferences.hideWeChatTitle,
             imageImportingCardIds = emptySet(),
         ),
     )
@@ -613,11 +611,6 @@ class HomeSidePanelState(
     fun setShowToolbarProfile(show: Boolean) {
         HomeSidePanelPreferences.showToolbarProfile = show
         _uiState.update { it.copy(showToolbarProfile = show) }
-    }
-
-    fun setHideWeChatTitle(hide: Boolean) {
-        HomeSidePanelPreferences.hideWeChatTitle = hide
-        _uiState.update { it.copy(hideWeChatTitle = hide) }
     }
 
     fun openPersonalProfile() {
