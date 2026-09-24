@@ -64,6 +64,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.isGone
 import androidx.core.view.isVisible
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChattingUILayout
 import dev.ujhhgtg.reflekt.reflekt
@@ -91,6 +92,7 @@ import dev.ujhhgtg.wekit.ui.utils.allViews
 import dev.ujhhgtg.wekit.ui.utils.findViewWhich
 import dev.ujhhgtg.wekit.ui.utils.findViewsWhich
 import dev.ujhhgtg.wekit.ui.utils.LifecycleOwnerProvider
+import dev.ujhhgtg.wekit.ui.utils.XposedLifecycleOwner
 import dev.ujhhgtg.wekit.ui.utils.setLifecycleOwner
 import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
 import dev.ujhhgtg.wekit.ui.utils.theme.InjectedUiTheme
@@ -1195,6 +1197,15 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         }
     }
 
+    private fun glassLifecycleOwner(activity: Activity): XposedLifecycleOwner {
+        val owner = LifecycleOwnerProvider.getOrCreate(activity)
+        val decorView = activity.window.decorView
+        if (decorView.findViewTreeLifecycleOwner() == null) {
+            decorView.setLifecycleOwner(owner)
+        }
+        return owner
+    }
+
     private fun applyIntegratedHeaderGlass(layout: View, header: View) {
         // A layout-owned title bar is still part of the capture source until performReparent()
         // completes. Attaching the glass now would make ViewBackdrop recursively draw itself.
@@ -1214,7 +1225,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             val headerHeight = group.height.takeIf { it > 0 } ?: group.measuredHeight
             if (headerHeight <= 0) return
             val activity = layout.context.activityOrNull() ?: return
-            val lifecycleOwner = LifecycleOwnerProvider.getOrCreate(activity)
+            val lifecycleOwner = glassLifecycleOwner(activity)
             val configState = mutableStateOf(config)
             val layer = ComposeView(header.context).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -1324,7 +1335,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         val menuHost = findMenuHost(parts.right)
         val surfaceColor = sampleHeaderSurfaceColor(header)
         val activity = layout.context.activityOrNull() ?: return null
-        val lifecycleOwner = LifecycleOwnerProvider.getOrCreate(activity)
+        val lifecycleOwner = glassLifecycleOwner(activity)
         val glassConfig = mutableStateOf(currentHeaderGlassConfig())
         val glassGeometry = mutableStateOf(
             SeparatedGlassGeometry(RectF(), RectF(), RectF()),

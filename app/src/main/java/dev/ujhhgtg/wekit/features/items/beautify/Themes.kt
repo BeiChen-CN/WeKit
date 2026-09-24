@@ -1433,7 +1433,12 @@ object Themes : ClickableFeature(), IResolveDex {
 
     private val classSmileyTabAdapter by dexClass {
         matcher {
-            usingStrings("MicroMsg.emoji.SmileyPanel.SmileyTabAdapter", "setSelection: %s")
+            // The selection log changes across builds; the bind override excludes tag-sharing lambdas.
+            usingStrings("MicroMsg.emoji.SmileyPanel.SmileyTabAdapter")
+            addMethod {
+                name = "onBindViewHolder"
+                paramCount = 2
+            }
         }
     }
 

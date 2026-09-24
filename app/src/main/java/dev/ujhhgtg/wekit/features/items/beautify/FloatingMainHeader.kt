@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.tencent.mm.ui.LauncherUI
 import com.tencent.mm.ui.mogic.WxViewPager
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.reflekt.utils.toClass
 import dev.ujhhgtg.wekit.R
 import dev.ujhhgtg.wekit.features.api.ui.WeMainActivityBeautifyApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
@@ -141,7 +142,6 @@ object FloatingMainHeader : ClickableFeature() {
         val originalStateListAnimator: StateListAnimator?,
         val originalMargins: IntArray,
         val overlayLayout: View,
-        val overlayWasEnabled: Boolean,
         val layoutListener: View.OnLayoutChangeListener,
         val attachListener: View.OnAttachStateChangeListener,
         var installedOutlineProvider: ViewOutlineProvider? = null,
@@ -149,8 +149,22 @@ object FloatingMainHeader : ClickableFeature() {
     )
 
     private val sessions = WeakHashMap<WxViewPager, WeakReference<MainHeaderSession>>()
+    private val hostOverlayModes = WeakHashMap<View, Boolean>()
+    private val ownOverlayWrite = ThreadLocal.withInitial { false }
 
     override fun onEnable() {
+        ACTION_BAR_OVERLAY_LAYOUT_CLASS.toClass().reflekt().firstMethod {
+            name = "setOverlayMode"
+            parameters(Boolean::class)
+        }.hookAfter {
+            if (ownOverlayWrite.get()!!) return@hookAfter
+            val overlay = thisObject as View
+            val requested = args[0] as Boolean
+            hostOverlayModes[overlay] = requested
+            sessions.values.mapNotNull { it.get() }
+                .forEach { it.onHostOverlayModeChanged(overlay, requested) }
+        }
+
         LauncherUI::class.reflekt().firstMethod {
             name = "onResume"
             parameters()
@@ -193,6 +207,20 @@ object FloatingMainHeader : ClickableFeature() {
     override fun onDisable() {
         sessions.values.mapNotNull { it.get() }.forEach(MainHeaderSession::detach)
         sessions.clear()
+        hostOverlayModes.clear()
+    }
+
+    private fun setOverlayModeByWeKit(overlay: View, enabled: Boolean) {
+        val wasOwnWrite = ownOverlayWrite.get()!!
+        ownOverlayWrite.set(true)
+        try {
+            overlay.reflekt().firstMethod {
+                name = "setOverlayMode"
+                parameters(Boolean::class)
+            }.invoke(enabled)
+        } finally {
+            ownOverlayWrite.set(wasOwnWrite)
+        }
     }
 
     private fun sessionFor(activity: Activity): MainHeaderSession? =
@@ -252,6 +280,13 @@ object FloatingMainHeader : ClickableFeature() {
         }
 
         fun ownsActivity(candidate: Activity): Boolean = activity === candidate
+
+        fun onHostOverlayModeChanged(overlay: View, requested: Boolean) {
+            if (headerState?.overlayLayout !== overlay || requested) return
+            if ((activity as LauncherUI).currentFragmet == null) {
+                setOverlayModeByWeKit(overlay, true)
+            }
+        }
 
         fun attach() {
             if (attached) return
@@ -365,15 +400,6 @@ object FloatingMainHeader : ClickableFeature() {
 
             val margins = header.layoutParams as ViewGroup.MarginLayoutParams
             val overlayLayout = findOverlayLayout(header)
-            val overlayReflect = overlayLayout.reflekt()
-            val overlayWasEnabled = overlayReflect.firstMethod {
-                name = "isInOverlayMode"
-                parameters()
-            }.invoke() as Boolean
-            overlayReflect.firstMethod {
-                name = "setOverlayMode"
-                parameters(Boolean::class)
-            }.invoke(true)
 
             val configState = mutableStateOf(currentGlassConfig())
             val layer = ComposeView(header.context).apply {
@@ -418,11 +444,11 @@ object FloatingMainHeader : ClickableFeature() {
                     margins.bottomMargin,
                 ),
                 overlayLayout = overlayLayout,
-                overlayWasEnabled = overlayWasEnabled,
                 layoutListener = layoutListener,
                 attachListener = attachListener,
             )
             headerState = state
+            setOverlayModeByWeKit(overlayLayout, true)
             header.background = transparentBackground
             header.addOnLayoutChangeListener(layoutListener)
             header.addOnAttachStateChangeListener(attachListener)
@@ -490,10 +516,8 @@ object FloatingMainHeader : ClickableFeature() {
             margins.bottomMargin = state.originalMargins[3]
             header.layoutParams = margins
 
-            state.overlayLayout.reflekt().firstMethod {
-                name = "setOverlayMode"
-                parameters(Boolean::class)
-            }.invoke(state.overlayWasEnabled)
+            // The host may have changed its requested mode while the card was active.
+            setOverlayModeByWeKit(state.overlayLayout, hostOverlayModes[state.overlayLayout] ?: false)
         }
 
         private fun findOverlayLayout(header: View): View {
