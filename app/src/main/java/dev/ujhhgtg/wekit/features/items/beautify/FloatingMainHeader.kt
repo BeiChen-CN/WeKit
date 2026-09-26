@@ -42,6 +42,8 @@ import com.tencent.mm.ui.mogic.WxViewPager
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.toClass
 import dev.ujhhgtg.wekit.R
+import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+import dev.ujhhgtg.wekit.dexkit.dsl.dexField
 import dev.ujhhgtg.wekit.features.api.ui.WeMainActivityBeautifyApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
 import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
@@ -66,12 +68,14 @@ import dev.ujhhgtg.wekit.ui.utils.theme.InjectedUiTheme
 import dev.ujhhgtg.wekit.utils.HookHandle
 import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.hookBeforeDirectly
+import org.luckypray.dexkit.DexKitBridge
+import org.luckypray.dexkit.result.FieldUsingType
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 /** Gives the shared LauncherUI action bar a floating glass surface on the first three tabs. */
-object FloatingMainHeader : ClickableFeature() {
+object FloatingMainHeader : ClickableFeature(), IResolveDex {
 
     override val technicalId = "主页悬浮顶栏"
     override val nameRes = R.string.feature_floating_main_header_name
@@ -85,6 +89,78 @@ object FloatingMainHeader : ClickableFeature() {
     private const val TOOLBAR_CLASS = "androidx.appcompat.widget.Toolbar"
     private const val CONTENT_FRAME_CLASS = "androidx.appcompat.widget.ContentFrameLayout"
     private const val RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView"
+
+    private val fieldOverlayMode by dexField()
+    private val fieldBaseInnerInsets by dexField()
+    private val fieldLastInnerInsets by dexField()
+    private val fieldWindowContentOverlay by dexField()
+
+    override fun resolveDex(dexKit: DexKitBridge) {
+        val overlay = dexKit.getClassData(ACTION_BAR_OVERLAY_LAYOUT_CLASS)!!
+        val measure = overlay.methods.single {
+            it.methodName == "onMeasure" && it.paramTypeNames == listOf("int", "int") &&
+                it.returnTypeName == "void"
+        }
+        val measureReads = measure.usingFields
+            .filter { it.usingType == FieldUsingType.Read }
+            .map { it.field }
+            .filter { it.className == ACTION_BAR_OVERLAY_LAYOUT_CLASS }
+            .distinctBy { it.descriptor }
+        val setter = overlay.methods.single {
+            it.methodName == "setOverlayMode" && it.paramTypeNames == listOf("boolean") &&
+                it.returnTypeName == "void"
+        }
+        // setOverlayMode also writes the legacy shadow-ignore flag. Only the actual overlay
+        // flag is read by onMeasure, so do not depend on either field's obfuscated name.
+        fieldOverlayMode.setDescriptor(
+            setter.usingFields.filter { it.usingType == FieldUsingType.Write }
+                .map { it.field }.distinctBy { it.descriptor }.single {
+                    it.typeName == "boolean" && it in measureReads
+                }
+        )
+        val draw = overlay.methods.single {
+            it.methodName == "draw" && it.paramTypeNames == listOf("android.graphics.Canvas") &&
+                it.returnTypeName == "void"
+        }
+        fieldWindowContentOverlay.setDescriptor(
+            draw.usingFields.filter { it.usingType == FieldUsingType.Read }
+                .map { it.field }.distinctBy { it.descriptor }.single {
+                    it.className == ACTION_BAR_OVERLAY_LAYOUT_CLASS &&
+                        it.typeName == "android.graphics.drawable.Drawable"
+                }
+        )
+
+        val namedBase = measureReads.filter { it.fieldName == "mBaseInnerInsets" }
+        if (namedBase.isNotEmpty()) {
+            // Retain the existing path for hosts that keep AppCompat's original field names,
+            // including the WindowInsetsCompat implementation.
+            fieldBaseInnerInsets.setDescriptor(namedBase.single())
+            fieldLastInnerInsets.setDescriptor(measureReads.single {
+                it.fieldName == "mLastInnerInsets" && it.typeName == namedBase.single().typeName
+            })
+        } else {
+            // The Rect implementation copies base content -> content, then base inner ->
+            // inner, and finally compares inner with last inner. DexKit preserves instruction
+            // order; validate this layout and its fitSystemWindows relationship strictly.
+            val rects = measureReads.filter { it.typeName == "android.graphics.Rect" }
+            require(rects.size == 5) { "Unexpected ActionBarOverlayLayout inset structure: $rects" }
+            val fit = overlay.methods.single {
+                it.methodName == "fitSystemWindows" &&
+                    it.paramTypeNames == listOf("android.graphics.Rect") &&
+                    it.returnTypeName == "boolean"
+            }
+            val fitRects = fit.usingFields.filter { it.usingType == FieldUsingType.Read }
+                .map { it.field }.filter {
+                    it.className == ACTION_BAR_OVERLAY_LAYOUT_CLASS &&
+                        it.typeName == "android.graphics.Rect"
+                }.distinctBy { it.descriptor }
+            require(fitRects.size == 4 && fitRects[0] == rects[2] && fitRects[1] == rects[0] &&
+                rects[4] !in fitRects
+            ) { "Unexpected ActionBarOverlayLayout base/last inset relationship" }
+            fieldBaseInnerInsets.setDescriptor(rects[2])
+            fieldLastInnerInsets.setDescriptor(rects[4])
+        }
+    }
 
     private const val DEFAULT_CORNER_RADIUS = 24
     private const val DEFAULT_SIDE_MARGIN = 12
@@ -154,7 +230,6 @@ object FloatingMainHeader : ClickableFeature() {
         val visualStates: List<HeaderVisualState>,
         val clipStates: List<HeaderClipState>,
         val originalContentShadow: Drawable?,
-        val hasContentShadow: Boolean,
         val listStates: MutableMap<ViewGroup, ListState> = LinkedHashMap(),
         val contentOffsets: MutableMap<View, ContentOffsetState> = LinkedHashMap(),
         var geometry: HeaderGeometry? = null,
@@ -287,8 +362,8 @@ object FloatingMainHeader : ClickableFeature() {
     private fun requestContentInsets(overlay: View) {
         // AppCompat caches the *original* dispatched insets. Force the next measure to dispatch
         // again when activating/restoring, even if the host was already in overlay mode.
-        val base = overlay.reflekt().getField("mBaseInnerInsets", true)!!
-        overlay.reflekt().setField("mLastInnerInsets", if (base is Rect) Rect(base) else base)
+        val base = fieldBaseInnerInsets.field.get(overlay)!!
+        fieldLastInnerInsets.field.set(overlay, if (base is Rect) Rect(base) else base)
         overlay.requestLayout()
         overlay.requestApplyInsets()
     }
@@ -371,7 +446,7 @@ object FloatingMainHeader : ClickableFeature() {
             // Use AppCompat's pre-ActionBar inner inset, not the root window inset: the latter
             // may already have been consumed as a content margin and would count status twice.
             // Older host AppCompat stores a Rect, newer versions a WindowInsetsCompat.
-            val baseInsets = state.overlayLayout.reflekt().getField("mBaseInnerInsets", true)!!
+            val baseInsets = fieldBaseInnerInsets.field.get(state.overlayLayout)!!
             val baseTop = if (baseInsets is Rect) {
                 baseInsets.top
             } else {
@@ -527,13 +602,8 @@ object FloatingMainHeader : ClickableFeature() {
             check(viewPager.allViews.none { it === header })
             hostOverlayModes.putIfAbsent(
                 overlayLayout,
-                // Read the backing state: the host may omit the unused AppCompat getter.
-                overlayLayout.reflekt().getField("mOverlayMode", true) as Boolean,
+                fieldOverlayMode.field.getBoolean(overlayLayout),
             )
-            val contentShadow = overlayLayout.reflekt().firstFieldOrNull {
-                name = "mWindowContentOverlay"
-                superclass(true)
-            }
             val visuals = header.allViews.filter { view ->
                 view === header || view.isToolbar() ||
                     (view is ViewGroup && view.allViews.any { it.isToolbar() })
@@ -586,8 +656,7 @@ object FloatingMainHeader : ClickableFeature() {
                 contentFrame = contentFrame,
                 visualStates = visuals,
                 clipStates = clips,
-                originalContentShadow = contentShadow?.get() as Drawable?,
-                hasContentShadow = contentShadow != null,
+                originalContentShadow = fieldWindowContentOverlay.field.get(overlayLayout) as Drawable?,
             )
             headerState = state
             setOverlayModeByWeKit(overlayLayout, true)
@@ -647,10 +716,8 @@ object FloatingMainHeader : ClickableFeature() {
                 if (clip.view.clipChildren) clip.view.clipChildren = false
                 if (clip.view.clipToPadding) clip.view.clipToPadding = false
             }
-            if (state.hasContentShadow &&
-                state.overlayLayout.reflekt().getField("mWindowContentOverlay", true) != null
-            ) {
-                state.overlayLayout.reflekt().setField("mWindowContentOverlay", null)
+            if (fieldWindowContentOverlay.field.get(state.overlayLayout) != null) {
+                fieldWindowContentOverlay.field.set(state.overlayLayout, null)
                 state.overlayLayout.invalidate()
             }
         }
@@ -779,10 +846,8 @@ object FloatingMainHeader : ClickableFeature() {
                 original.view.clipChildren = original.clipChildren
                 original.view.clipToPadding = original.clipToPadding
             }
-            if (state.hasContentShadow &&
-                state.overlayLayout.reflekt().getField("mWindowContentOverlay", true) == null
-            ) {
-                state.overlayLayout.reflekt().setField("mWindowContentOverlay", state.originalContentShadow)
+            if (fieldWindowContentOverlay.field.get(state.overlayLayout) == null) {
+                fieldWindowContentOverlay.field.set(state.overlayLayout, state.originalContentShadow)
                 state.overlayLayout.invalidate()
             }
             state.listStates.values.forEach { original ->
