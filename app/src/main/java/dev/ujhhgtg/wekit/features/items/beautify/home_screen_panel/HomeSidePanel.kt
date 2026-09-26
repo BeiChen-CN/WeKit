@@ -39,6 +39,7 @@ import dev.ujhhgtg.wekit.features.api.ui.WeMainActivityBeautifyApi
 import dev.ujhhgtg.wekit.features.core.FeatureCategoryIds
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
 import dev.ujhhgtg.wekit.features.items.beautify.AddMainScreenFab
+import dev.ujhhgtg.wekit.features.items.beautify.FloatingMainHeader
 import dev.ujhhgtg.wekit.ui.utils.LifecycleOwnerProvider
 import dev.ujhhgtg.wekit.ui.utils.dpToPx
 import dev.ujhhgtg.wekit.ui.utils.findViewWhich
@@ -271,6 +272,11 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
         sessions.values.mapNotNull { it.get() }.forEach { it.detach() }
         sessions.clear()
         HomeSidePanelWalletBalanceSource.clear()
+    }
+
+    fun onExternalChromeChanged(activity: Activity) {
+        sessions.values.mapNotNull { it.get() }.firstOrNull { it.ownsActivity(activity) }
+            ?.onExternalChromeChanged()
     }
 
     private fun removeSessionsForActivity(activity: Activity) {
@@ -760,6 +766,8 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
 
         fun ownsActivity(candidate: Activity): Boolean = activity === candidate
 
+        fun onExternalChromeChanged() = requestSync(SYNC_HIERARCHY or SYNC_GEOMETRY)
+
         fun onLauncherResumed() {
             panelState.onLauncherResumed()
             requestSync(SYNC_ALL)
@@ -1050,6 +1058,7 @@ object HomeSidePanel : SwitchFeature(), IResolveDex {
             collectViews(decorRoot, actionBarCandidates) {
                 it.javaClass.name == "androidx.appcompat.widget.ActionBarContainer"
             }
+            FloatingMainHeader.hostViewFor(activity)?.let(actionBarCandidates::add)
             val staleActionBars = actionBarContainers.filter { it !in actionBarCandidates }
             staleActionBars.forEach { actionBar ->
                 unobserveView(actionBar)

@@ -181,7 +181,13 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             .filterTo(linkedSetOf()) { it in validIndices }
     }
 
+    private var runningTabOrder: List<Int>? = null
+
+    fun logicalTabIndex(pagerIndex: Int): Int =
+        if (isActive) runningTabOrder?.get(pagerIndex) ?: pagerIndex else pagerIndex
+
     override fun onEnable() {
+        runningTabOrder = null
         // Freeze the page set for this process. Changing these options is intentionally applied
         // only on the next WeChat launch because FragmentStatePagerAdapter cannot safely change
         // the meaning of already-instantiated positions.
@@ -214,6 +220,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         }
 
         val visibleWechatIndices = visibleTabItems.map(NavItem::wechatIndex)
+        runningTabOrder = visibleWechatIndices
         val homePagerIndex = visibleWechatIndices.indexOf(0)
         val remapProgrammaticTab = ThreadLocal.withInitial { false }
         val animateNextPageChange = ThreadLocal.withInitial { false }

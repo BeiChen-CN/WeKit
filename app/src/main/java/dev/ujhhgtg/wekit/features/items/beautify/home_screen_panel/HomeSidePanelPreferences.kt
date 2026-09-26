@@ -14,7 +14,6 @@ object HomeSidePanelPreferenceKeys {
     const val HITOKOTO_SETTINGS = "home_side_panel_hitokoto_settings"
     const val HITOKOTO_LAST_SUCCESS = "home_side_panel_hitokoto_last_success"
     const val SHOW_TOOLBAR_PROFILE = "home_side_panel_show_toolbar_profile"
-    const val HIDE_WECHAT_TITLE = "home_side_panel_hide_wechat_title"
     const val HIDE_WALLET_BALANCE = "home_side_panel_hide_wallet_balance"
 }
 
