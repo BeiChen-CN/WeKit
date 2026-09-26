@@ -1,19 +1,23 @@
 package dev.ujhhgtg.wekit.features.items.beautify
 
-import android.animation.StateListAnimator
 import android.app.Activity
 import android.graphics.Outline
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.ViewTreeObserver
+import android.view.WindowInsets
+import android.widget.AbsListView
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -25,8 +29,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -62,6 +68,7 @@ import dev.ujhhgtg.wekit.utils.WeLogger
 import dev.ujhhgtg.wekit.utils.hookBeforeDirectly
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import kotlin.math.roundToInt
 
 /** Gives the shared LauncherUI action bar a floating glass surface on the first three tabs. */
 object FloatingMainHeader : ClickableFeature() {
@@ -76,6 +83,8 @@ object FloatingMainHeader : ClickableFeature() {
     private const val ACTION_BAR_OVERLAY_LAYOUT_CLASS =
         "androidx.appcompat.widget.ActionBarOverlayLayout"
     private const val TOOLBAR_CLASS = "androidx.appcompat.widget.Toolbar"
+    private const val CONTENT_FRAME_CLASS = "androidx.appcompat.widget.ContentFrameLayout"
+    private const val RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView"
 
     private const val DEFAULT_CORNER_RADIUS = 24
     private const val DEFAULT_SIDE_MARGIN = 12
@@ -123,7 +132,7 @@ object FloatingMainHeader : ClickableFeature() {
         val blurRadiusDp: Int,
         val dynamicGravityHighlight: Boolean,
         val cornerRadiusDp: Int,
-        val alignSourceTopWhenAbove: Boolean,
+        val elevationDp: Int,
     )
 
     private data class HeaderGeometry(
@@ -137,26 +146,66 @@ object FloatingMainHeader : ClickableFeature() {
         val header: ViewGroup,
         val layer: ComposeView,
         val glassConfig: MutableState<GlassConfig>,
-        val originalBackground: Drawable?,
-        val installedBackground: Drawable,
-        val originalOutlineProvider: ViewOutlineProvider?,
-        val originalClipToOutline: Boolean,
-        val originalElevation: Float,
-        val originalTranslationZ: Float,
-        val originalStateListAnimator: StateListAnimator?,
         val originalMargins: IntArray,
         val overlayLayout: View,
         val layoutListener: View.OnLayoutChangeListener,
         val attachListener: View.OnAttachStateChangeListener,
-        var installedOutlineProvider: ViewOutlineProvider? = null,
+        val contentFrame: View,
+        val visualStates: List<HeaderVisualState>,
+        val clipStates: List<HeaderClipState>,
+        val originalContentShadow: Drawable?,
+        val hasContentShadow: Boolean,
+        val listStates: MutableMap<ViewGroup, ListState> = LinkedHashMap(),
+        val contentOffsets: MutableMap<View, ContentOffsetState> = LinkedHashMap(),
         var geometry: HeaderGeometry? = null,
     )
+
+    private class HeaderVisualState(val view: View) {
+        val background = view.background
+        val foreground = view.foreground
+        val outlineProvider = view.outlineProvider
+        val clipToOutline = view.clipToOutline
+        val elevation = view.elevation
+        val translationZ = view.translationZ
+        val animator = view.stateListAnimator
+        val transparentBackground = ColorDrawable(android.graphics.Color.TRANSPARENT)
+        var installedOutlineProvider: ViewOutlineProvider? = null
+    }
+
+    private class HeaderClipState(val view: ViewGroup) {
+        val clipChildren = view.clipChildren
+        val clipToPadding = view.clipToPadding
+    }
+
+    private class ListState(val view: ViewGroup) {
+        val paddingTop = view.paddingTop
+        val clipToPadding = view.clipToPadding
+        var installedPaddingTop = paddingTop
+    }
+
+    private class ContentOffsetState(val view: View) {
+        val paddingTop = view.paddingTop
+        val topMargin = (view.layoutParams as? ViewGroup.MarginLayoutParams)?.topMargin
+        var installedPaddingTop = paddingTop
+        var installedTopMargin = topMargin
+    }
 
     private val sessions = WeakHashMap<WxViewPager, WeakReference<MainHeaderSession>>()
     private val hostOverlayModes = WeakHashMap<View, Boolean>()
     private val ownOverlayWrite = ThreadLocal.withInitial { false }
 
     override fun onEnable() {
+        // Overlay mode leaves an ActionBar inset for the content subtree to consume. Remove
+        // only that synthetic inset, on this window's content frame, not on every host view.
+        ViewGroup::class.reflekt().firstMethod {
+            name = "dispatchApplyWindowInsets"
+            parameters(WindowInsets::class)
+        }.hookBefore {
+            val content = thisObject as View
+            sessions.values.mapNotNull { it.get() }.forEach { session ->
+                args[0] = session.contentInsets(content, args[0] as WindowInsets)
+            }
+        }
         ACTION_BAR_OVERLAY_LAYOUT_CLASS.toClass().reflekt().firstMethod {
             name = "setOverlayMode"
             parameters(Boolean::class)
@@ -174,6 +223,12 @@ object FloatingMainHeader : ClickableFeature() {
             parameters()
         }.hookAfter {
             sessionFor(thisObject as Activity)?.onChatTransition()
+        }
+        LauncherUI::class.reflekt().firstMethod {
+            name = "startChatting"
+            parameters(String::class, android.os.Bundle::class, Boolean::class)
+        }.hookBefore {
+            sessionFor(thisObject as Activity)?.restoreBeforeChat()
         }
         LauncherUI::class.reflekt().firstMethod {
             name = "startChatting"
@@ -229,6 +284,15 @@ object FloatingMainHeader : ClickableFeature() {
         }
     }
 
+    private fun requestContentInsets(overlay: View) {
+        // AppCompat caches the *original* dispatched insets. Force the next measure to dispatch
+        // again when activating/restoring, even if the host was already in overlay mode.
+        val base = overlay.reflekt().getField("mBaseInnerInsets", true)!!
+        overlay.reflekt().setField("mLastInnerInsets", if (base is Rect) Rect(base) else base)
+        overlay.requestLayout()
+        overlay.requestApplyInsets()
+    }
+
     private fun sessionFor(activity: Activity): MainHeaderSession? =
         sessions.values.mapNotNull { it.get() }.firstOrNull { it.ownsActivity(activity) }
 
@@ -248,11 +312,11 @@ object FloatingMainHeader : ClickableFeature() {
         sessions.values.mapNotNull { it.get() }.forEach(MainHeaderSession::scheduleSync)
     }
 
-    private fun currentGlassConfig(tabIndex: Int) = GlassConfig(
+    private fun currentGlassConfig() = GlassConfig(
         blurRadiusDp = blurRadiusDp,
         dynamicGravityHighlight = dynamicGravityHighlight,
         cornerRadiusDp = cornerRadiusDp,
-        alignSourceTopWhenAbove = tabIndex == 1 || tabIndex == 2,
+        elevationDp = elevationDp,
     )
 
     private fun currentGeometry() = HeaderGeometry(
@@ -282,21 +346,50 @@ object FloatingMainHeader : ClickableFeature() {
             syncPosted = false
             if (attached) sync()
         }
-        private val decorLayoutListener = View.OnLayoutChangeListener {
-                _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
-            if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
-                scheduleSync()
-            }
+        private val decorLayoutListener = ViewTreeObserver.OnGlobalLayoutListener { scheduleSync() }
+        private val decorPreDrawListener = ViewTreeObserver.OnPreDrawListener {
+            headerState?.let(::neutralizeHeader)
+            true
         }
 
         fun ownsActivity(candidate: Activity): Boolean = activity === candidate
 
         fun onHostOverlayModeChanged(overlay: View, requested: Boolean) {
             if (headerState?.overlayLayout !== overlay || requested) return
-            if ((activity as LauncherUI).currentFragmet == null) {
+            if ((activity as LauncherUI).currentFragmet == null && selectedTabIndex != 3) {
                 setOverlayModeByWeKit(overlay, true)
+                requestContentInsets(overlay)
             }
         }
+
+        @Suppress("DEPRECATION")
+        fun contentInsets(content: View, insets: WindowInsets): WindowInsets {
+            val state = headerState ?: return insets
+            if (state.contentFrame !== content || selectedTabIndex == 3 ||
+                (activity as LauncherUI).currentFragmet != null
+            ) return insets
+            // Use AppCompat's pre-ActionBar inner inset, not the root window inset: the latter
+            // may already have been consumed as a content margin and would count status twice.
+            // Older host AppCompat stores a Rect, newer versions a WindowInsetsCompat.
+            val baseInsets = state.overlayLayout.reflekt().getField("mBaseInnerInsets", true)!!
+            val baseTop = if (baseInsets is Rect) {
+                baseInsets.top
+            } else {
+                baseInsets.reflekt().firstMethod {
+                    name = "getSystemWindowInsetTop"
+                    parameters()
+                }.invoke() as Int
+            }
+            val top = (insets.systemWindowInsetTop - measuredHeaderHeight(state.header))
+                .coerceAtLeast(baseTop)
+            if (top >= insets.systemWindowInsetTop) return insets
+            return insets.replaceSystemWindowInsets(
+                insets.systemWindowInsetLeft, top,
+                insets.systemWindowInsetRight, insets.systemWindowInsetBottom,
+            )
+        }
+
+        fun restoreBeforeChat() = removeHeaderState()
 
         fun attach() {
             if (attached) return
@@ -309,9 +402,11 @@ object FloatingMainHeader : ClickableFeature() {
                 // ReplaceNavigationBar maps a reordered pager index back to WeChat's logical
                 // tab index at priority 100, before this default-priority callback.
                 selectedTabIndex = args[0] as Int
+                if (selectedTabIndex == 3) removeHeaderState()
                 scheduleSync()
             }
-            decorRoot.addOnLayoutChangeListener(decorLayoutListener)
+            decorRoot.viewTreeObserver.addOnGlobalLayoutListener(decorLayoutListener)
+            decorRoot.viewTreeObserver.addOnPreDrawListener(decorPreDrawListener)
             scheduleSync()
         }
 
@@ -321,7 +416,10 @@ object FloatingMainHeader : ClickableFeature() {
             tabSelectionHook?.unhook()
             tabSelectionHook = null
             decorRoot.removeCallbacks(syncRunnable)
-            decorRoot.removeOnLayoutChangeListener(decorLayoutListener)
+            if (decorRoot.viewTreeObserver.isAlive) {
+                decorRoot.viewTreeObserver.removeOnGlobalLayoutListener(decorLayoutListener)
+                decorRoot.viewTreeObserver.removeOnPreDrawListener(decorPreDrawListener)
+            }
             pendingTransitionLayoutListener?.let(transitionHost::removeOnLayoutChangeListener)
             pendingTransitionLayoutListener = null
             removeHeaderState()
@@ -368,7 +466,9 @@ object FloatingMainHeader : ClickableFeature() {
             }
 
             val current = headerState
-            if (current != null && !isValidHeader(current.header)) {
+            if (current != null && (!isValidHeader(current.header) ||
+                current.visualStates.any { it.view.isToolbar() && !it.view.isAttachedToWindow }
+            )) {
                 removeHeaderState()
             }
 
@@ -379,13 +479,11 @@ object FloatingMainHeader : ClickableFeature() {
                 return
             }
 
-            val params = state.layer.layoutParams as FrameLayout.LayoutParams
-            if (params.height != height) {
-                params.height = height
-                state.layer.layoutParams = params
-            }
-            state.glassConfig.value = currentGlassConfig(selectedTabIndex)
+            state.glassConfig.value = currentGlassConfig()
             applyGeometry(state, currentGeometry())
+            updateGlassBounds(state, height)
+            neutralizeHeader(state)
+            applyListGeometry(state)
         }
 
         private fun findMainHeader(): ViewGroup? {
@@ -422,8 +520,35 @@ object FloatingMainHeader : ClickableFeature() {
 
             val margins = header.layoutParams as ViewGroup.MarginLayoutParams
             val overlayLayout = findOverlayLayout(header)
+            val contentFrame = (overlayLayout as ViewGroup).allViews.first {
+                it.javaClass.name == CONTENT_FRAME_CLASS
+            }
+            // The capture must contain page content only: never sample the Toolbar/glass itself.
+            check(viewPager.allViews.none { it === header })
+            hostOverlayModes.putIfAbsent(
+                overlayLayout,
+                overlayLayout.reflekt().firstMethod {
+                    name = "isInOverlayMode"
+                    parameters()
+                }.invoke() as Boolean,
+            )
+            val contentShadow = overlayLayout.reflekt().firstFieldOrNull {
+                name = "mWindowContentOverlay"
+                superclass(true)
+            }
+            val visuals = header.allViews.filter { view ->
+                view === header || view.isToolbar() ||
+                    (view is ViewGroup && view.allViews.any { it.isToolbar() })
+            }.map(::HeaderVisualState).toList()
+            val clips = ArrayList<HeaderClipState>()
+            var clipHost: ViewGroup? = header
+            while (clipHost != null) {
+                clips += HeaderClipState(clipHost)
+                if (clipHost === overlayLayout) break
+                clipHost = clipHost.parent as? ViewGroup
+            }
 
-            val configState = mutableStateOf(currentGlassConfig(selectedTabIndex))
+            val configState = mutableStateOf(currentGlassConfig())
             val layer = ComposeView(header.context).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 isClickable = false
@@ -436,7 +561,6 @@ object FloatingMainHeader : ClickableFeature() {
                     }
                 }
             }
-            val transparentBackground = ColorDrawable(android.graphics.Color.TRANSPARENT)
             val layoutListener = View.OnLayoutChangeListener {
                     _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                 if (left != oldLeft || top != oldTop || right != oldRight || bottom != oldBottom) {
@@ -452,13 +576,6 @@ object FloatingMainHeader : ClickableFeature() {
                 header = header,
                 layer = layer,
                 glassConfig = configState,
-                originalBackground = header.background,
-                installedBackground = transparentBackground,
-                originalOutlineProvider = header.outlineProvider,
-                originalClipToOutline = header.clipToOutline,
-                originalElevation = header.elevation,
-                originalTranslationZ = header.translationZ,
-                originalStateListAnimator = header.stateListAnimator,
                 originalMargins = intArrayOf(
                     margins.leftMargin,
                     margins.topMargin,
@@ -468,10 +585,15 @@ object FloatingMainHeader : ClickableFeature() {
                 overlayLayout = overlayLayout,
                 layoutListener = layoutListener,
                 attachListener = attachListener,
+                contentFrame = contentFrame,
+                visualStates = visuals,
+                clipStates = clips,
+                originalContentShadow = contentShadow?.get() as Drawable?,
+                hasContentShadow = contentShadow != null,
             )
             headerState = state
             setOverlayModeByWeKit(overlayLayout, true)
-            header.background = transparentBackground
+            neutralizeHeader(state)
             header.addOnLayoutChangeListener(layoutListener)
             header.addOnAttachStateChangeListener(attachListener)
             header.addView(
@@ -480,21 +602,80 @@ object FloatingMainHeader : ClickableFeature() {
                 FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height),
             )
             applyGeometry(state, currentGeometry())
+            updateGlassBounds(state, height)
+            requestContentInsets(overlayLayout)
             return state
         }
 
+        private fun updateGlassBounds(state: HeaderState, height: Int) {
+            val padding = (state.glassConfig.value.elevationDp * 2 *
+                state.header.resources.displayMetrics.density).roundToInt()
+            val params = state.layer.layoutParams as FrameLayout.LayoutParams
+            val width = state.header.width + padding * 2
+            if (params.width == width && params.height == height + padding * 2 &&
+                params.leftMargin == -padding && params.topMargin == -padding &&
+                params.rightMargin == -padding && params.bottomMargin == -padding
+            ) return
+            params.width = width
+            params.height = height + padding * 2
+            params.leftMargin = -padding
+            params.topMargin = -padding
+            // Balance the expanded child in wrap_content measurement; otherwise each layout
+            // can increase ActionBarContainer's measured height by the shadow padding again.
+            params.rightMargin = -padding
+            params.bottomMargin = -padding
+            state.layer.layoutParams = params
+        }
+
+        private fun neutralizeHeader(state: HeaderState) {
+            state.visualStates.forEach { original ->
+                val view = original.view
+                if (view.background !== original.transparentBackground) {
+                    view.background = original.transparentBackground
+                }
+                if (view.foreground != null) view.foreground = null
+                if (view.elevation != 0f) view.elevation = 0f
+                if (view.translationZ != 0f) view.translationZ = 0f
+                if (view.stateListAnimator != null) view.stateListAnimator = null
+                // The host container must not clip the glass shadow; the actual surface owns
+                // its rounded shape. Leave the original title/menu views and their events intact.
+                val clip = original.installedOutlineProvider != null
+                if (view.clipToOutline != clip) view.clipToOutline = clip
+                if (view.outlineProvider !== original.installedOutlineProvider) {
+                    view.outlineProvider = original.installedOutlineProvider
+                }
+            }
+            state.clipStates.forEach { clip ->
+                if (clip.view.clipChildren) clip.view.clipChildren = false
+                if (clip.view.clipToPadding) clip.view.clipToPadding = false
+            }
+            if (state.hasContentShadow &&
+                state.overlayLayout.reflekt().getField("mWindowContentOverlay", true) != null
+            ) {
+                state.overlayLayout.reflekt().setField("mWindowContentOverlay", null)
+                state.overlayLayout.invalidate()
+            }
+        }
+
         private fun applyGeometry(state: HeaderState, geometry: HeaderGeometry) {
-            if (state.geometry == geometry) return
             val header = state.header
             val density = header.resources.displayMetrics.density
             val margins = header.layoutParams as ViewGroup.MarginLayoutParams
             val side = (geometry.sideMarginDp * density).toInt()
             val top = (geometry.topGapDp * density).toInt()
-            margins.leftMargin = state.originalMargins[0] + side
-            margins.topMargin = state.originalMargins[1] + top
-            margins.rightMargin = state.originalMargins[2] + side
-            margins.bottomMargin = state.originalMargins[3]
-            header.layoutParams = margins
+            val left = state.originalMargins[0] + side
+            val topMargin = state.originalMargins[1] + top
+            val right = state.originalMargins[2] + side
+            if (margins.leftMargin != left || margins.topMargin != topMargin ||
+                margins.rightMargin != right || margins.bottomMargin != state.originalMargins[3]
+            ) {
+                margins.leftMargin = left
+                margins.topMargin = topMargin
+                margins.rightMargin = right
+                margins.bottomMargin = state.originalMargins[3]
+                header.layoutParams = margins
+            }
+            if (state.geometry == geometry) return
 
             val outlineProvider = object : ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: Outline) {
@@ -502,14 +683,77 @@ object FloatingMainHeader : ClickableFeature() {
                     outline.setRoundRect(0, 0, view.width, view.height.coerceAtLeast(1), radius)
                 }
             }
-            state.installedOutlineProvider = outlineProvider
-            header.outlineProvider = outlineProvider
-            header.clipToOutline = true
-            header.stateListAnimator = null
-            header.translationZ = 0f
-            header.elevation = geometry.elevationDp * density
-            header.invalidateOutline()
+            state.visualStates.filter { it.view.isToolbar() }.forEach { visual ->
+                visual.installedOutlineProvider = outlineProvider
+                visual.view.invalidateOutline()
+            }
             state.geometry = geometry
+        }
+
+        @Suppress("DEPRECATION")
+        private fun applyListGeometry(state: HeaderState) {
+            val pagerLocation = IntArray(2).also(viewPager::getLocationInWindow)
+            val centerX = pagerLocation[0] + viewPager.width / 2
+            // Find the main scrolling viewport on the currently visible physical page. This
+            // also works after ReplaceNavigationBar reorders the logical tab indices.
+            val list = viewPager.allViews.filterIsInstance<ViewGroup>()
+                .filter { it is AbsListView || it.isHostClass(RECYCLER_VIEW_CLASS) }
+                .filter { view ->
+                    if (!view.isShown || view.width <= 0 || view.height <= 0) return@filter false
+                    val location = IntArray(2).also(view::getLocationInWindow)
+                    location[0] <= centerX && location[0] + view.width > centerX
+                }.maxByOrNull { it.width.toLong() * it.height } ?: return
+            val systemTop = decorRoot.rootWindowInsets?.systemWindowInsetTop ?: return
+            val listLocation = IntArray(2).also(list::getLocationInWindow)
+            val headerHeight = measuredHeaderHeight(state.header)
+            var reservedSpace = (listLocation[1] - systemTop).coerceAtLeast(0)
+            var changed = false
+            var ancestor = list.parent as? View
+            // Some host page wrappers explicitly reserve actionBarSize in addition to window
+            // insets. Only remove a measured one-bar reservation on the list's ancestor path;
+            // never zero arbitrary page padding, status-bar padding, or other sibling layouts.
+            while (ancestor != null && ancestor !== state.contentFrame) {
+                val view = ancestor
+                val original = state.contentOffsets[view]
+                val padding = original?.paddingTop ?: view.paddingTop
+                val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
+                val margin = original?.topMargin ?: margins?.topMargin
+                if (reservedSpace >= headerHeight && padding in headerHeight..(headerHeight + systemTop)) {
+                    val offset = state.contentOffsets.getOrPut(view) { ContentOffsetState(view) }
+                    val target = padding - headerHeight
+                    if (view.paddingTop != target) {
+                        view.setPadding(view.paddingLeft, target, view.paddingRight, view.paddingBottom)
+                        changed = true
+                    }
+                    offset.installedPaddingTop = target
+                    reservedSpace -= headerHeight
+                }
+                if (reservedSpace >= headerHeight && margins != null &&
+                    margin != null && margin in headerHeight..(headerHeight + systemTop)
+                ) {
+                    val offset = state.contentOffsets.getOrPut(view) { ContentOffsetState(view) }
+                    val target = margin - headerHeight
+                    if (margins.topMargin != target) {
+                        margins.topMargin = target
+                        view.layoutParams = margins
+                        changed = true
+                    }
+                    offset.installedTopMargin = target
+                    reservedSpace -= headerHeight
+                }
+                ancestor = view.parent as? View
+            }
+            if (changed) return // Measure the new viewport before calculating its content padding.
+            val original = state.listStates.getOrPut(list) { ListState(list) }
+            val headerLocation = IntArray(2).also(state.header::getLocationInWindow)
+            val cover = (headerLocation[1] + headerHeight - listLocation[1]).coerceAtLeast(0)
+            // Preserve any larger native top padding instead of adding a second reservation.
+            val target = maxOf(original.paddingTop, cover)
+            if (list.paddingTop != target) {
+                list.setPadding(list.paddingLeft, target, list.paddingRight, list.paddingBottom)
+            }
+            original.installedPaddingTop = target
+            if (list.clipToPadding) list.clipToPadding = false
         }
 
         private fun removeHeaderState() {
@@ -521,16 +765,48 @@ object FloatingMainHeader : ClickableFeature() {
             if (state.layer.parent === header) header.removeView(state.layer)
             state.layer.disposeComposition()
 
-            if (header.background === state.installedBackground) {
-                header.background = state.originalBackground
+            state.visualStates.forEach { original ->
+                val view = original.view
+                if (view.background === original.transparentBackground) view.background = original.background
+                if (view.foreground == null) view.foreground = original.foreground
+                if (view.outlineProvider === original.installedOutlineProvider) {
+                    view.outlineProvider = original.outlineProvider
+                    view.clipToOutline = original.clipToOutline
+                }
+                view.elevation = original.elevation
+                view.translationZ = original.translationZ
+                view.stateListAnimator = original.animator
             }
-            if (header.outlineProvider === state.installedOutlineProvider) {
-                header.outlineProvider = state.originalOutlineProvider
+            state.clipStates.forEach { original ->
+                original.view.clipChildren = original.clipChildren
+                original.view.clipToPadding = original.clipToPadding
             }
-            header.clipToOutline = state.originalClipToOutline
-            header.elevation = state.originalElevation
-            header.translationZ = state.originalTranslationZ
-            header.stateListAnimator = state.originalStateListAnimator
+            if (state.hasContentShadow &&
+                state.overlayLayout.reflekt().getField("mWindowContentOverlay", true) == null
+            ) {
+                state.overlayLayout.reflekt().setField("mWindowContentOverlay", state.originalContentShadow)
+                state.overlayLayout.invalidate()
+            }
+            state.listStates.values.forEach { original ->
+                val view = original.view
+                if (view.paddingTop == original.installedPaddingTop) {
+                    view.setPadding(view.paddingLeft, original.paddingTop, view.paddingRight, view.paddingBottom)
+                }
+                view.clipToPadding = original.clipToPadding
+            }
+            state.contentOffsets.values.forEach { original ->
+                val view = original.view
+                if (view.paddingTop == original.installedPaddingTop) {
+                    view.setPadding(view.paddingLeft, original.paddingTop, view.paddingRight, view.paddingBottom)
+                }
+                val margins = view.layoutParams as? ViewGroup.MarginLayoutParams
+                if (margins != null && original.topMargin != null &&
+                    margins.topMargin == original.installedTopMargin
+                ) {
+                    margins.topMargin = original.topMargin
+                    view.layoutParams = margins
+                }
+            }
             val margins = header.layoutParams as ViewGroup.MarginLayoutParams
             margins.leftMargin = state.originalMargins[0]
             margins.topMargin = state.originalMargins[1]
@@ -540,6 +816,7 @@ object FloatingMainHeader : ClickableFeature() {
 
             // The host may have changed its requested mode while the card was active.
             setOverlayModeByWeKit(state.overlayLayout, hostOverlayModes[state.overlayLayout] ?: false)
+            requestContentInsets(state.overlayLayout)
         }
 
         private fun findOverlayLayout(header: View): View {
@@ -551,10 +828,12 @@ object FloatingMainHeader : ClickableFeature() {
             error("$ACTION_BAR_OVERLAY_LAYOUT_CLASS not found above $ACTION_BAR_CONTAINER_CLASS")
         }
 
-        private fun View.isToolbar(): Boolean {
+        private fun View.isToolbar(): Boolean = isHostClass(TOOLBAR_CLASS)
+
+        private fun View.isHostClass(className: String): Boolean {
             var type: Class<*>? = javaClass
             while (type != null) {
-                if (type.name == TOOLBAR_CLASS) return true
+                if (type.name == className) return true
                 type = type.superclass
             }
             return false
@@ -580,7 +859,6 @@ object FloatingMainHeader : ClickableFeature() {
             } else {
                 null
             },
-            alignSourceTopWhenAbove = config.alignSourceTopWhenAbove,
         )
         val tilt = rememberFloatingGlassTilt(config.dynamicGravityHighlight)
         val highlight = rememberFloatingGlassHighlight(tilt, 0f)
@@ -588,6 +866,15 @@ object FloatingMainHeader : ClickableFeature() {
         androidx.compose.foundation.layout.Box(
             modifier = Modifier
                 .fillMaxSize()
+                .padding((config.elevationDp * 2).dp)
+                .dropShadow(
+                    shape = shape,
+                    shadow = Shadow(
+                        radius = (config.elevationDp * 2).dp,
+                        color = Color.Black,
+                        alpha = if (isSystemInDarkTheme()) 0.2f else 0.1f,
+                    ),
+                )
                 .floatingGlassSurface(
                     backdrop = backdrop,
                     shape = shape,
