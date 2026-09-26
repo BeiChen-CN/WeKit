@@ -9,6 +9,7 @@ data class MonetSemanticRule(
     val preferredEvidence: Set<String> = emptySet(),
     val optional: Boolean = false,
     val optionalWhenResourceAbsent: MonetResourceKey? = null,
+    val alternativeRequiredEvidence: List<Set<String>> = emptyList(),
 )
 
 val MONET_RULES = listOf(
@@ -26,7 +27,13 @@ val MONET_RULES = listOf(
     MonetSemanticRule("chat.bubble.outgoing.link", "drawable", setOf("usage:layout:LinearLayout/RelativeLayout/LinearLayout/FrameLayout/LinearLayout:16842964:background")),
     MonetSemanticRule("chat.bubble.outgoing.link.mask", "drawable", setOf("usage:layout:LinearLayout/RelativeLayout/LinearLayout/FrameLayout/ImageView:16842964:background")),
     MonetSemanticRule("chat.bubble.outgoing.normal", "drawable", setOf("usage:layout:LinearLayout/LinearLayout/LinearLayout/LinearLayout/com.tencent.mm.ui.widget.MMNeat7extView:16842964:background")),
-    MonetSemanticRule("chat.input.background", "drawable", setOf("usage:layout:RelativeLayout/LinearLayout/LinearLayout/LinearLayout/LinearLayout/LinearLayout/RelativeLayout/com.tencent.mm.view.MaxHeightScrollView/LinearLayout/LinearLayout:16842964:background")),
+    MonetSemanticRule(
+        "chat.input.background",
+        "drawable",
+        setOf("usage:layout:RelativeLayout/LinearLayout/LinearLayout/LinearLayout/LinearLayout/LinearLayout/RelativeLayout/com.tencent.mm.view.MaxHeightScrollView/LinearLayout/LinearLayout:16842964:background"),
+        // The inspected domestic 8.0.78 input layout uses a RelativeLayout wrapper here.
+        alternativeRequiredEvidence = listOf(setOf("usage:layout:RelativeLayout/LinearLayout/LinearLayout/LinearLayout/LinearLayout/RelativeLayout/RelativeLayout/com.tencent.mm.view.MaxHeightScrollView/LinearLayout/LinearLayout:16842964:background")),
+    ),
     MonetSemanticRule("chat.input.container", "layout", setOf("attribute:RelativeLayout/LinearLayout/RelativeLayout:16842997:layout_height:DIMENSION:literal:DIMENSION:12289")),
     MonetSemanticRule("chat.input.transparent-layer", "drawable", setOf("usage:layout:LinearLayout/FrameLayout/LinearLayout/LinearLayout/RelativeLayout/FrameLayout/com.tencent.mm.ui.widget.RoundedCornerFrameLayout/View:16842964:background")),
     MonetSemanticRule("chat.quote.background", "drawable", setOf("usage:layout:RelativeLayout/LinearLayout/LinearLayout/LinearLayout/androidx.constraintlayout.widget.ConstraintLayout/RelativeLayout:16842964:background")),

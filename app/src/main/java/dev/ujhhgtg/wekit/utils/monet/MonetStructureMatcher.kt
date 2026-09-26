@@ -117,7 +117,9 @@ object MonetStructureMatcher {
         onProgress: (completed: Int?, total: Int?, detail: String) -> Unit = { _, _, _ -> },
     ): StructuralResolution {
         val requiredByType = MONET_RULES.groupBy(MonetSemanticRule::type).mapValues { (_, rules) ->
-            rules.flatMapTo(hashSetOf()) { it.requiredEvidence + it.preferredEvidence }
+            rules.flatMapTo(hashSetOf()) {
+                it.requiredEvidence + it.alternativeRequiredEvidence.flatten() + it.preferredEvidence
+            }
         }
         val idsByToken = HashMap<String, MutableSet<Int>>()
         val nodesByType = requiredByType.keys.associateWith(graph::nodes)
@@ -156,6 +158,15 @@ object MonetStructureMatcher {
             } else {
                 rule.requiredEvidence.map { idsByToken[it].orEmpty() }
                     .reduce { result, ids -> result.intersect(ids) }
+                    .ifEmpty {
+                        // Try confirmed alternative structures only when the primary path is absent.
+                        // Keep all matches so ambiguity still fails the final role validation.
+                        rule.alternativeRequiredEvidence.flatMapTo(linkedSetOf()) { evidence ->
+                            require(evidence.isNotEmpty()) { "${rule.id}: empty alternative evidence" }
+                            evidence.map { idsByToken[it].orEmpty() }
+                                .reduce { result, ids -> result.intersect(ids) }
+                        }
+                    }
             }
             val semanticCandidates: Set<Int>? = when (rule.id) {
                 // Older search bars share the global surface color. Only overlay a dedicated tint;
