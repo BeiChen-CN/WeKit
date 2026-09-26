@@ -527,10 +527,8 @@ object FloatingMainHeader : ClickableFeature() {
             check(viewPager.allViews.none { it === header })
             hostOverlayModes.putIfAbsent(
                 overlayLayout,
-                overlayLayout.reflekt().firstMethod {
-                    name = "isInOverlayMode"
-                    parameters()
-                }.invoke() as Boolean,
+                // Read the backing state: the host may omit the unused AppCompat getter.
+                overlayLayout.reflekt().getField("mOverlayMode", true) as Boolean,
             )
             val contentShadow = overlayLayout.reflekt().firstFieldOrNull {
                 name = "mWindowContentOverlay"
