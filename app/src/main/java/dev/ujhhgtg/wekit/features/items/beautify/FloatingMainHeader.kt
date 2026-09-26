@@ -88,6 +88,7 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
         "androidx.appcompat.widget.ActionBarOverlayLayout"
     private const val TOOLBAR_CLASS = "androidx.appcompat.widget.Toolbar"
     private const val CONTENT_FRAME_CLASS = "androidx.appcompat.widget.ContentFrameLayout"
+    private const val FROSTED_CONTENT_CLASS = "com.tencent.mm.ui.FrostedContentView"
     private const val RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView"
 
     private val fieldOverlayMode by dexField()
@@ -227,11 +228,12 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
         val layoutListener: View.OnLayoutChangeListener,
         val attachListener: View.OnAttachStateChangeListener,
         val contentFrame: View,
-        val visualStates: List<HeaderVisualState>,
+        val visualStates: MutableMap<View, HeaderVisualState>,
         val clipStates: List<HeaderClipState>,
         val originalContentShadow: Drawable?,
         val listStates: MutableMap<ViewGroup, ListState> = LinkedHashMap(),
         val contentOffsets: MutableMap<View, ContentOffsetState> = LinkedHashMap(),
+        val frostedTopStates: MutableMap<View, FrostedTopState> = LinkedHashMap(),
         var geometry: HeaderGeometry? = null,
     )
 
@@ -245,11 +247,38 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
         val animator = view.stateListAnimator
         val transparentBackground = ColorDrawable(android.graphics.Color.TRANSPARENT)
         var installedOutlineProvider: ViewOutlineProvider? = null
+        var visibilityBeforeHide: Int? = null
     }
 
     private class HeaderClipState(val view: ViewGroup) {
         val clipChildren = view.clipChildren
         val clipToPadding = view.clipToPadding
+    }
+
+    private class FrostedTopState(val view: View) {
+        private val getter = view.reflekt().firstMethod {
+            name = "getTopBlurAreaHeight"
+            parameters()
+        }
+        private val setter = view.reflekt().firstMethod {
+            name = "setTopBlurAreaHeight"
+            parameters(Int::class)
+        }
+        private var originalHeight = getter.invoke() as Int
+
+        fun clear() {
+            val height = getter.invoke() as Int
+            if (height == 0) return
+            originalHeight = height
+            setter.invoke(0)
+            view.invalidate()
+        }
+
+        fun restore() {
+            if (getter.invoke() as Int != 0) return
+            setter.invoke(originalHeight)
+            view.invalidate()
+        }
     }
 
     private class ListState(val view: ViewGroup) {
@@ -270,6 +299,17 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
     private val ownOverlayWrite = ThreadLocal.withInitial { false }
 
     override fun onEnable() {
+        // Rect-based AppCompat calls View.fitSystemWindows directly from ContentFrameLayout;
+        // it never reaches dispatchApplyWindowInsets, even on recent Android versions.
+        View::class.reflekt().firstMethod {
+            name = "fitSystemWindows"
+            parameters(Rect::class)
+        }.hookBefore {
+            val content = thisObject as View
+            sessions.values.mapNotNull { it.get() }.forEach { session ->
+                args[0] = session.contentInsets(content, args[0] as Rect)
+            }
+        }
         // Overlay mode leaves an ActionBar inset for the content subtree to consume. Remove
         // only that synthetic inset, on this window's content frame, not on every host view.
         ViewGroup::class.reflekt().firstMethod {
@@ -437,6 +477,19 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
             }
         }
 
+        fun contentInsets(content: View, insets: Rect): Rect {
+            val state = headerState ?: return insets
+            if (state.contentFrame !== content || selectedTabIndex == 3 ||
+                (activity as LauncherUI).currentFragmet != null
+            ) return insets
+            val base = fieldBaseInnerInsets.field.get(state.overlayLayout)
+            if (base !is Rect) return insets
+            // Do not mutate AppCompat's cached Rect: restoration must receive the full inset.
+            return Rect(insets).apply {
+                top = (top - measuredHeaderHeight(state.header)).coerceAtLeast(base.top)
+            }
+        }
+
         @Suppress("DEPRECATION")
         fun contentInsets(content: View, insets: WindowInsets): WindowInsets {
             val state = headerState ?: return insets
@@ -447,14 +500,13 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
             // may already have been consumed as a content margin and would count status twice.
             // Older host AppCompat stores a Rect, newer versions a WindowInsetsCompat.
             val baseInsets = fieldBaseInnerInsets.field.get(state.overlayLayout)!!
-            val baseTop = if (baseInsets is Rect) {
-                baseInsets.top
-            } else {
-                baseInsets.reflekt().firstMethod {
-                    name = "getSystemWindowInsetTop"
-                    parameters()
-                }.invoke() as Int
-            }
+            // Rect hosts add the bar only in their direct fitSystemWindows dispatch. Applying
+            // the subtraction to a platform WindowInsets dispatch as well would consume it twice.
+            if (baseInsets is Rect) return insets
+            val baseTop = baseInsets.reflekt().firstMethod {
+                name = "getSystemWindowInsetTop"
+                parameters()
+            }.invoke() as Int
             val top = (insets.systemWindowInsetTop - measuredHeaderHeight(state.header))
                 .coerceAtLeast(baseTop)
             if (top >= insets.systemWindowInsetTop) return insets
@@ -542,7 +594,7 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
 
             val current = headerState
             if (current != null && (!isValidHeader(current.header) ||
-                current.visualStates.any { it.view.isToolbar() && !it.view.isAttachedToWindow }
+                current.visualStates.values.any { it.view.isToolbar() && !it.view.isAttachedToWindow }
             )) {
                 removeHeaderState()
             }
@@ -555,6 +607,14 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
             }
 
             state.glassConfig.value = currentGlassConfig()
+            // WeChat can replace the custom title/menu subtree when changing tabs.
+            nativeHeaderContainers(state).forEach { view ->
+                state.visualStates.getOrPut(view) { HeaderVisualState(view) }
+            }
+            state.contentFrame.allViews.filter { it.javaClass.name == FROSTED_CONTENT_CLASS }
+                .forEach { view ->
+                    state.frostedTopStates.getOrPut(view) { FrostedTopState(view) }
+                }
             applyGeometry(state, currentGeometry())
             updateGlassBounds(state, height)
             neutralizeHeader(state)
@@ -604,10 +664,8 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
                 overlayLayout,
                 fieldOverlayMode.field.getBoolean(overlayLayout),
             )
-            val visuals = header.allViews.filter { view ->
-                view === header || view.isToolbar() ||
-                    (view is ViewGroup && view.allViews.any { it.isToolbar() })
-            }.map(::HeaderVisualState).toList()
+            val visuals = header.allViews.filterIsInstance<ViewGroup>()
+                .associateTo(LinkedHashMap<View, HeaderVisualState>()) { it to HeaderVisualState(it) }
             val clips = ArrayList<HeaderClipState>()
             var clipHost: ViewGroup? = header
             while (clipHost != null) {
@@ -621,6 +679,8 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 isClickable = false
                 isFocusable = false
+                clipChildren = false
+                clipToPadding = false
                 setLifecycleOwner(lifecycleOwner)
                 setContent {
                     InjectedUiTheme {
@@ -695,7 +755,10 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
         }
 
         private fun neutralizeHeader(state: HeaderState) {
-            state.visualStates.forEach { original ->
+            // This host paints a separate full-width strip in dispatchDraw, independent of
+            // its background. Keep its bottom frosted area and enabled state untouched.
+            state.frostedTopStates.values.forEach(FrostedTopState::clear)
+            state.visualStates.values.forEach { original ->
                 val view = original.view
                 if (view.background !== original.transparentBackground) {
                     view.background = original.transparentBackground
@@ -704,8 +767,19 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
                 if (view.elevation != 0f) view.elevation = 0f
                 if (view.translationZ != 0f) view.translationZ = 0f
                 if (view.stateListAnimator != null) view.stateListAnimator = null
-                // The host container must not clip the glass shadow; the actual surface owns
-                // its rounded shape. Leave the original title/menu views and their events intact.
+                // Preserve measurement while hiding the entire native home Toolbar, including
+                // custom title/menu views whose IDs and visibility are managed by WeChat.
+                if (view.isToolbar()) {
+                    if (selectedTabIndex == 0) {
+                        if (original.visibilityBeforeHide == null) {
+                            original.visibilityBeforeHide = view.visibility
+                        }
+                        if (view.visibility != View.INVISIBLE) view.visibility = View.INVISIBLE
+                    } else {
+                        restoreToolbarVisibility(original)
+                    }
+                }
+                // Only the glass and Toolbar content have rounded bounds; their host is clear.
                 val clip = original.installedOutlineProvider != null
                 if (view.clipToOutline != clip) view.clipToOutline = clip
                 if (view.outlineProvider !== original.installedOutlineProvider) {
@@ -720,6 +794,25 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
                 fieldWindowContentOverlay.field.set(state.overlayLayout, null)
                 state.overlayLayout.invalidate()
             }
+        }
+
+        private fun nativeHeaderContainers(state: HeaderState): Sequence<ViewGroup> = sequence {
+            val pending = ArrayDeque<ViewGroup>()
+            pending.add(state.header)
+            while (pending.isNotEmpty()) {
+                val view = pending.removeLast()
+                yield(view)
+                for (index in 0 until view.childCount) {
+                    val child = view.getChildAt(index)
+                    if (child is ViewGroup && child !== state.layer) pending.add(child)
+                }
+            }
+        }
+
+        private fun restoreToolbarVisibility(original: HeaderVisualState) {
+            val visibility = original.visibilityBeforeHide ?: return
+            if (original.view.visibility == View.INVISIBLE) original.view.visibility = visibility
+            original.visibilityBeforeHide = null
         }
 
         private fun applyGeometry(state: HeaderState, geometry: HeaderGeometry) {
@@ -748,7 +841,7 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
                     outline.setRoundRect(0, 0, view.width, view.height.coerceAtLeast(1), radius)
                 }
             }
-            state.visualStates.filter { it.view.isToolbar() }.forEach { visual ->
+            state.visualStates.values.filter { it.view.isToolbar() }.forEach { visual ->
                 visual.installedOutlineProvider = outlineProvider
                 visual.view.invalidateOutline()
             }
@@ -830,8 +923,10 @@ object FloatingMainHeader : ClickableFeature(), IResolveDex {
             if (state.layer.parent === header) header.removeView(state.layer)
             state.layer.disposeComposition()
 
-            state.visualStates.forEach { original ->
+            state.frostedTopStates.values.forEach(FrostedTopState::restore)
+            state.visualStates.values.forEach { original ->
                 val view = original.view
+                restoreToolbarVisibility(original)
                 if (view.background === original.transparentBackground) view.background = original.background
                 if (view.foreground == null) view.foreground = original.foreground
                 if (view.outlineProvider === original.installedOutlineProvider) {
